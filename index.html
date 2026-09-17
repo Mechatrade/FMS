@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mechatrade Finance Management System</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%231F3A2E%22/><text x=%2250%22 y=%2266%22 font-size=%2255%22 text-anchor=%22middle%22 fill=%22%23F4EFE4%22 font-family=%22Arial%22>M</text></svg>" />
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Tailwind (CDN, config extended below) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          charcoal: '#1C1C1A',
+          forest: { DEFAULT: '#1F3A2E', light: '#2C5443', dark: '#15281E' },
+          cream: '#F4EFE4',
+          muted: '#6B7280',
+          borderc: '#E5E7EB'
+        },
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        boxShadow: {
+          subtle: '0 1px 2px 0 rgba(28,28,26,0.05)',
+          card: '0 1px 3px 0 rgba(28,28,26,0.08), 0 1px 2px -1px rgba(28,28,26,0.06)'
+        }
+      }
+    }
+  }
+</script>
+
+<!-- Lucide icons -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+<style>
+  html, body, #root { height: 100%; }
+  body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; background:#F4EFE4; color:#1C1C1A; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #d8d2c2; border-radius: 8px; }
+  .nav-link.active { background: #1F3A2E; color: #fff; }
+  .nav-link.active svg { color: #fff; }
+  .fade-in { animation: fadeIn .18s ease-out; }
+  @keyframes fadeIn { from { opacity:0; transform: translateY(2px);} to {opacity:1; transform:translateY(0);} }
+  [data-page]:not(.active-page) { display:none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Firebase SDK (modular, via CDN) -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+/* ==========================================================================
+   APP CONSTANTS
+   ========================================================================== */
+const APP_NAME = "Mechatrade Finance Management System";
+const COMPANY_NAME = "Mechatrade Industrial Solutions Inc.";
+
+/* ==========================================================================
+   FIREBASE INIT
+   ==========================================================================
+   Paste your Firebase project's web config below (Firebase Console >
+   Project Settings > General > Your apps > SDK setup and configuration).
+   This object is safe to keep in client-side code - it is not a secret.
+   Real protection comes from Firestore Security Rules + Firebase Auth
+   (see firestore.rules), not from hiding this object.
+*/
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+let app, auth, db;
+let firebaseReady = false;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  firebaseReady = true;
+} catch (e) {
+  console.error("Firebase failed to initialize. Check the firebaseConfig values above.", e);
+}
+
+/* ==========================================================================
+   NAVIGATION CONFIG  (single source of truth for sidebar + routes + pages)
+   ========================================================================== */
+const NAV = [
+  { name: "Dashboard", icon: "layout-dashboard", path: "dashboard" },
+  {
+    name: "Finance", icon: "wallet", path: "finance",
+    description: "Core accounting: ledgers, journal entries, receivables, payables, cash and tax.",
+    children: [
+      { name: "Overview", path: "finance", description: "Summary of financial position and activity." },
+      { name: "Chart of Accounts", path: "finance/chart-of-accounts", description: "Manage the company's account structure." },
+      { name: "General Ledger", path: "finance/general-ledger", description: "View posted transactions across all accounts." },
+      { name: "Journal Entries", path: "finance/journal-entries", description: "Create and review manual journal entries." },
+      { name: "Accounts Receivable", path: "finance/accounts-receivable", description: "Track amounts owed by customers." },
+      { name: "Accounts Payable", path: "finance/accounts-payable", description: "Track amounts owed to suppliers." },
+      { name: "Expenses", path: "finance/expenses", description: "Record and categorize company expenses." },
+      { name: "Cash & Bank", path: "finance/cash-bank", description: "Manage cash positions and bank accounts." },
+      { name: "Tax Management", path: "finance/tax-management", description: "Track tax obligations and filings." },
+    ]
+  },
+  {
+    name: "Billing & Collection", icon: "receipt", path: "billing",
+    description: "Client purchase orders, fulfillment, invoicing and collections.",
+    children: [
+      { name: "Overview", path: "billing", description: "Summary of billing and collection activity." },
+      { name: "Client Purchase Orders", path: "billing/client-purchase-orders", description: "Manage purchase orders received from clients." },
+      { name: "Purchase Order Monitoring", path: "billing/po-monitoring", description: "Track PO status from receipt through fulfillment and invoicing." },
+      { name: "Fulfillment Tracking", path: "billing/fulfillment-tracking", description: "Track delivery / service completion against POs." },
+      { name: "Invoices", path: "billing/invoices", description: "Manage client invoices." },
+      { name: "Unbilled Fulfillment", path: "billing/unbilled-fulfillment", description: "Fulfilled work not yet invoiced." },
+      { name: "Collections", path: "billing/collections", description: "Track collection of outstanding invoices." },
+      { name: "Accounts Receivable Aging", path: "billing/ar-aging", description: "View receivables by age bracket." },
+      { name: "Credit Notes", path: "billing/credit-notes", description: "Manage credit notes issued to clients." },
+    ]
+  },
+  {
+    name: "Procurement", icon: "shopping-cart", path: "procurement",
+    description: "Suppliers, purchase requests, orders, receiving and payments.",
+    children: [
+      { name: "Overview", path: "procurement", description: "Summary of procurement activity." },
+      { name: "Suppliers", path: "procurement/suppliers", description: "Manage supplier records." },
+      { name: "Purchase Requests", path: "procurement/purchase-requests", description: "Manage internal purchase requests." },
+      { name: "Supplier Purchase Orders", path: "procurement/purchase-orders", description: "Manage purchase orders issued to suppliers." },
+      { name: "Receiving", path: "procurement/receiving", description: "Record receipt of ordered goods/services." },
+      { name: "Supplier Bills", path: "procurement/supplier-bills", description: "Manage bills received from suppliers." },
+      { name: "Supplier Payments", path: "procurement/supplier-payments", description: "Track payments made to suppliers." },
+    ]
+  },
+  {
+    name: "Reports", icon: "bar-chart-3", path: "reports",
+    description: "Financial, sales, purchasing and management reporting.",
+    children: [
+      { name: "Financial Reports", path: "reports/financial", description: "Income statement, balance sheet and related reports." },
+      { name: "Sales Reports", path: "reports/sales", description: "Sales performance reporting." },
+      { name: "Purchase Order Reports", path: "reports/purchase-orders", description: "Reporting on purchase order activity." },
+      { name: "Accounts Receivable", path: "reports/accounts-receivable", description: "Receivables reporting." },
+      { name: "Accounts Payable", path: "reports/accounts-payable", description: "Payables reporting." },
+      { name: "Expense Reports", path: "reports/expenses", description: "Expense reporting." },
+      { name: "Project Reports", path: "reports/projects", description: "Project-level financial reporting." },
+      { name: "Profitability", path: "reports/profitability", description: "Profitability analysis." },
+      { name: "Management Reports", path: "reports/management", description: "Reporting for management review." },
+    ]
+  },
+  {
+    name: "Documents", icon: "folder", path: "documents",
+    description: "Central document storage. Google Drive integration will be connected in a future release.",
+    children: [
+      { name: "Document Center", path: "documents", description: "Central hub for all company documents." },
+      { name: "Client Documents", path: "documents/client", description: "Documents related to clients." },
+      { name: "Supplier Documents", path: "documents/supplier", description: "Documents related to suppliers." },
+      { name: "Financial Documents", path: "documents/financial", description: "Financial statements and supporting files." },
+      { name: "Purchase Orders", path: "documents/purchase-orders", description: "Purchase order documents." },
+      { name: "Invoices", path: "documents/invoices", description: "Invoice documents." },
+      { name: "Receipts", path: "documents/receipts", description: "Receipt documents." },
+      { name: "Contracts", path: "documents/contracts", description: "Contract documents." },
+      { name: "Project Documents", path: "documents/projects", description: "Documents related to projects." },
+    ]
+  },
+  {
+    name: "Administration", icon: "users", path: "administration",
+    description: "Customers, suppliers, employees, departments and company records.",
+    children: [
+      { name: "Overview", path: "administration", description: "Summary of administrative records." },
+      { name: "Customers", path: "administration/customers", description: "Manage customer records." },
+      { name: "Suppliers", path: "administration/suppliers", description: "Manage supplier records." },
+      { name: "Employees", path: "administration/employees", description: "Manage employee records." },
+      { name: "Departments", path: "administration/departments", description: "Manage company departments." },
+      { name: "Company Information", path: "administration/company-info", description: "Company profile and information." },
+      { name: "Assets", path: "administration/assets", description: "Manage company assets." },
+      { name: "Activity Logs", path: "administration/activity-logs", description: "Review system activity history." },
+    ]
+  },
+  {
+    name: "Settings", icon: "settings", path: "settings",
+    description: "System configuration, users, roles, permissions and numbering.",
+    children: [
+      { name: "General Settings", path: "settings/general", description: "General system settings." },
+      { name: "Users & Roles", path: "settings/users-roles", description: "Manage users and their roles." },
+      { name: "Permissions", path: "settings/permissions", description: "Manage role-based permissions." },
+      { name: "Approval Rules", path: "settings/approval-rules", description: "Configure approval workflows." },
+      { name: "Accounting Settings", path: "settings/accounting", description: "Configure accounting preferences." },
+      { name: "Tax Settings", path: "settings/tax", description: "Configure tax settings." },
+      { name: "Numbering", path: "settings/numbering", description: "Configure document numbering schemes." },
+      { name: "Notifications", path: "settings/notifications", description: "Configure notification preferences." },
+      { name: "System Logs", path: "settings/system-logs", description: "Review system logs." },
+    ]
+  },
+];
+
+// Future modules - registry only, NOT shown in sidebar until enabled: true
+const STANDBY_MODULES = {
+  projects:   { name: "Projects & Installation", icon: "hard-hat",       enabled: false },
+  inventory:  { name: "Inventory",                icon: "package",       enabled: false },
+  workOrders: { name: "Work Orders",              icon: "clipboard-list",enabled: false },
+  budgeting:  { name: "Budget & Forecast",        icon: "piggy-bank",    enabled: false },
+  payroll:    { name: "Payroll",                  icon: "users",         enabled: false },
+  contracts:  { name: "Contract Management",      icon: "file-signature",enabled: false },
+  logistics:  { name: "Logistics",                icon: "truck",         enabled: false },
+  analytics:  { name: "Business Analytics",       icon: "trending-up",   enabled: false },
+};
+
+// role -> which top-level module paths are visible
+const ROLE_PERMISSIONS = {
+  super_admin:     { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:true, settings:true },
+  finance_manager: { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:false, settings:false },
+  finance_staff:   { finance:true, billing:true, procurement:false, reports:true, documents:true, administration:false, settings:false },
+  admin:           { finance:false, billing:false, procurement:false, reports:false, documents:true, administration:true, settings:true },
+  management:      { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:true, settings:false },
+};
+
+let currentUser = null;
+let currentProfile = null;
+
+/* ==========================================================================
+   HELPERS
+   ========================================================================== */
+function el(html) {
+  const t = document.createElement('template');
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+function icon(name, cls = "w-5 h-5") {
+  return `<i data-lucide="${name}" class="${cls}"></i>`;
+}
+function refreshIcons() { if (window.lucide) lucide.createIcons(); }
+function findNavByPath(path) {
+  for (const item of NAV) {
+    if (item.path === path) return { item, child: null };
+    if (item.children) {
+      const child = item.children.find(c => c.path === path);
+      if (child) return { item, child };
+    }
+  }
+  return null;
+}
+function canAccess(topPath) {
+  if (!currentProfile) return true;
+  const perms = ROLE_PERMISSIONS[currentProfile.role] || {};
+  return perms[topPath] !== false;
+}
+
+/* ==========================================================================
+   RENDER: ROOT SHELLS
+   ========================================================================== */
+const root = document.getElementById('root');
+
+function renderLoading() {
+  root.innerHTML = `
+    <div class="min-h-screen flex items-center justify-center bg-cream">
+      <div class="flex flex-col items-center gap-3 text-muted">
+        <div class="w-8 h-8 border-2 border-forest border-t-transparent rounded-full animate-spin"></div>
+        <p class="text-sm">Loading ${APP_NAME}...</p>
+      </div>
+    </div>`;
+}
+
+function renderLogin(errorMsg = "") {
+  root.innerHTML = `
+    <div class="min-h-screen flex items-center justify-center bg-cream px-4">
+      <div class="w-full max-w-md">
+        <div class="bg-white border border-borderc rounded-xl shadow-card p-8 fade-in">
+          <div class="flex flex-col items-center mb-6">
+            <div class="w-14 h-14 rounded-lg bg-forest flex items-center justify-center mb-4">
+              <span class="text-cream font-bold text-xl">M</span>
+            </div>
+            <h1 class="text-lg font-semibold text-charcoal text-center">${APP_NAME}</h1>
+            <p class="text-sm text-muted mt-1">Sign in to continue</p>
+          </div>
+
+          ${!firebaseReady ? `
+            <div class="mb-4 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-3 py-2">
+              Firebase is not configured yet. Add your project keys to the <code class="font-mono">firebaseConfig</code> object near the top of this file.
+            </div>` : ''}
+
+          <form id="login-form" class="space-y-4">
+            <div id="login-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+            <div>
+              <label class="block text-sm font-medium text-charcoal mb-1.5">Email</label>
+              <input id="login-email" type="email" required autocomplete="username"
+                class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
+                placeholder="you@mechatrade.com" />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-charcoal mb-1.5">Password</label>
+              <div class="relative">
+                <input id="login-password" type="password" required autocomplete="current-password"
+                  class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
+                  placeholder="••••••••" />
+                <button type="button" id="toggle-password" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-charcoal">
+                  ${icon('eye', 'w-4 h-4')}
+                </button>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between text-sm">
+              <label class="flex items-center gap-2 text-muted cursor-pointer select-none">
+                <input id="login-remember" type="checkbox" class="rounded border-borderc text-forest focus:ring-forest" />
+                Remember me
+              </label>
+              <button type="button" id="forgot-link" class="text-forest hover:underline">Forgot password?</button>
+            </div>
+
+            <button id="login-submit" type="submit" class="w-full inline-flex items-center justify-center rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark transition-colors disabled:opacity-60">
+              <span id="login-submit-text">Sign In</span>
+            </button>
+          </form>
+        </div>
+        <p class="text-center text-xs text-muted mt-6">${COMPANY_NAME}</p>
+      </div>
+    </div>`;
+
+  refreshIcons();
+
+  const pwInput = document.getElementById('login-password');
+  document.getElementById('toggle-password').addEventListener('click', () => {
+    pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
+    refreshIcons();
+  });
+
+  document.getElementById('forgot-link').addEventListener('click', async () => {
+    const email = document.getElementById('login-email').value.trim();
+    if (!email) { showLoginError('Enter your email above first, then click "Forgot password?" again.'); return; }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      showLoginError('Password reset email sent. Check your inbox.', true);
+    } catch (e) {
+      showLoginError(friendlyAuthError(e));
+    }
+  });
+
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    const remember = document.getElementById('login-remember').checked;
+    const btn = document.getElementById('login-submit');
+    const btnText = document.getElementById('login-submit-text');
+
+    if (!firebaseReady) { showLoginError('Firebase is not configured. See the firebaseConfig object near the top of this file.'); return; }
+
+    btn.disabled = true;
+    btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+
+    try {
+      await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+      await signInWithEmailAndPassword(auth, email, password);
+      // onAuthStateChanged will take over rendering
+    } catch (err) {
+      showLoginError(friendlyAuthError(err));
+      btn.disabled = false;
+      btnText.textContent = 'Sign In';
+    }
+  });
+}
+
+function showLoginError(msg, isSuccess = false) {
+  const box = document.getElementById('login-error');
+  if (!box) return;
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  if (isSuccess) {
+    box.classList.remove('bg-red-50','border-red-200','text-red-700');
+    box.classList.add('bg-green-50','border-green-200','text-green-700');
+  }
+}
+
+function friendlyAuthError(err) {
+  const code = err && err.code ? err.code : '';
+  const map = {
+    'auth/invalid-email': 'That email address looks invalid.',
+    'auth/user-disabled': 'This account has been disabled.',
+    'auth/user-not-found': 'No account found with that email.',
+    'auth/wrong-password': 'Incorrect password.',
+    'auth/invalid-credential': 'Incorrect email or password.',
+    'auth/too-many-requests': 'Too many attempts. Please wait and try again.',
+  };
+  return map[code] || (err && err.message) || 'Something went wrong. Please try again.';
+}
+
+/* ==========================================================================
+   RENDER: APP SHELL (sidebar + header + content outlet)
+   ========================================================================== */
+function sidebarHtml() {
+  const items = NAV.map(item => {
+    const visible = canAccess(item.path);
+    if (!visible) return '';
+    const hasChildren = !!item.children;
+    return `
+      <div class="nav-group" data-nav-key="${item.path}">
+        <button class="nav-link w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-md text-sm font-medium text-cream/90 hover:bg-white/10 transition-colors" data-nav-toggle="${item.path}">
+          <span class="flex items-center gap-2.5">
+            ${icon(item.icon, 'w-[18px] h-[18px]')}
+            ${item.name}
+          </span>
+          ${hasChildren ? icon('chevron-down', 'w-4 h-4 nav-chevron transition-transform') : ''}
+        </button>
+        ${hasChildren ? `
+          <div class="nav-children pl-9 space-y-0.5 mt-0.5 overflow-hidden" data-nav-children="${item.path}">
+            ${item.children.map(c => `
+              <a href="#/${c.path}" data-route="${c.path}"
+                 class="nav-link block px-3 py-2 rounded-md text-[13px] text-cream/70 hover:text-cream hover:bg-white/10 transition-colors">
+                ${c.name}
+              </a>`).join('')}
+          </div>` : ''}
+      </div>`;
+  }).join('');
+
+  return `
+    <aside id="sidebar" class="fixed lg:static z-40 inset-y-0 left-0 w-64 bg-forest flex flex-col -translate-x-full lg:translate-x-0 transition-transform duration-200">
+      <div class="flex items-center gap-2.5 px-4 h-16 border-b border-white/10 shrink-0">
+        <div class="w-9 h-9 rounded-md bg-cream flex items-center justify-center shrink-0">
+          <span class="text-forest font-bold">M</span>
+        </div>
+        <div class="min-w-0">
+          <p class="text-cream text-sm font-semibold leading-tight truncate">Mechatrade</p>
+          <p class="text-cream/60 text-[11px] leading-tight">Finance Management System</p>
+        </div>
+      </div>
+
+      <nav class="flex-1 overflow-y-auto px-2 py-3 space-y-1">${items}</nav>
+
+      <div class="border-t border-white/10 p-3">
+        <button id="sidebar-profile-btn" class="w-full flex items-center gap-2.5 px-2 py-2 rounded-md hover:bg-white/10 transition-colors text-left">
+          <div class="w-8 h-8 rounded-full bg-cream/90 flex items-center justify-center text-forest text-xs font-semibold shrink-0" id="sidebar-avatar">?</div>
+          <div class="min-w-0 flex-1">
+            <p class="text-cream text-sm font-medium truncate" id="sidebar-username">-</p>
+            <p class="text-cream/60 text-[11px] truncate" id="sidebar-userrole">-</p>
+          </div>
+        </button>
+        <button id="sidebar-signout" class="mt-1 w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-cream/70 hover:text-cream hover:bg-white/10 transition-colors text-sm">
+          ${icon('log-out', 'w-4 h-4')} Sign Out
+        </button>
+      </div>
+    </aside>
+    <div id="sidebar-backdrop" class="fixed inset-0 bg-black/30 z-30 hidden lg:hidden"></div>`;
+}
+
+function headerHtml() {
+  return `
+    <header class="h-16 shrink-0 bg-white border-b border-borderc flex items-center justify-between px-4 lg:px-6">
+      <div class="flex items-center gap-3 min-w-0">
+        <button id="sidebar-toggle" class="lg:hidden p-2 -ml-2 text-charcoal">${icon('menu', 'w-5 h-5')}</button>
+        <nav id="breadcrumb" class="text-sm text-muted truncate"></nav>
+      </div>
+      <div class="flex items-center gap-3">
+        <button class="relative p-2 text-muted hover:text-charcoal rounded-md hover:bg-cream" title="Notifications (placeholder)">
+          ${icon('bell', 'w-5 h-5')}
+          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-forest"></span>
+        </button>
+        <div class="relative">
+          <button id="header-profile-btn" class="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md hover:bg-cream">
+            <div class="text-right hidden sm:block">
+              <p class="text-sm font-medium text-charcoal leading-tight" id="header-username">-</p>
+              <p class="text-[11px] text-muted leading-tight" id="header-userrole">-</p>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-forest text-cream flex items-center justify-center text-xs font-semibold" id="header-avatar">?</div>
+            ${icon('chevron-down', 'w-4 h-4 text-muted')}
+          </button>
+          <div id="header-profile-menu" class="hidden absolute right-0 mt-2 w-48 bg-white border border-borderc rounded-md shadow-card py-1 z-50">
+            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="administration/company-info">${icon('user','w-4 h-4')} My Profile</button>
+            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="settings/general">${icon('settings','w-4 h-4')} Account Settings</button>
+            <div class="h-px bg-borderc my-1"></div>
+            <button id="header-signout" class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">${icon('log-out','w-4 h-4')} Sign Out</button>
+          </div>
+        </div>
+      </div>
+    </header>`;
+}
+
+function renderShell() {
+  root.innerHTML = `
+    <div class="min-h-screen flex bg-cream">
+      ${sidebarHtml()}
+      <div class="flex-1 min-w-0 flex flex-col">
+        ${headerHtml()}
+        <main id="content" class="flex-1 overflow-y-auto p-4 lg:p-6"></main>
+      </div>
+    </div>`;
+  refreshIcons();
+  wireShellEvents();
+  applyUserToChrome();
+}
+
+function applyUserToChrome() {
+  const name = (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || 'User';
+  const role = currentProfile ? roleLabel(currentProfile.role) : '—';
+  const initials = name.split(' ').map(p => p[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || '?';
+  ['sidebar-username','header-username'].forEach(id => { const n = document.getElementById(id); if (n) n.textContent = name; });
+  ['sidebar-userrole','header-userrole'].forEach(id => { const n = document.getElementById(id); if (n) n.textContent = role; });
+  ['sidebar-avatar','header-avatar'].forEach(id => { const n = document.getElementById(id); if (n) n.textContent = initials; });
+}
+
+function roleLabel(role) {
+  const map = {
+    super_admin: 'Super Admin', finance_manager: 'Finance Manager', finance_staff: 'Finance Staff',
+    admin: 'Admin', management: 'Management'
+  };
+  return map[role] || role || '—';
+}
+
+function wireShellEvents() {
+  document.getElementById('sidebar-toggle')?.addEventListener('click', () => toggleSidebar(true));
+  document.getElementById('sidebar-backdrop')?.addEventListener('click', () => toggleSidebar(false));
+
+  document.getElementById('sidebar-signout')?.addEventListener('click', handleSignOut);
+  document.getElementById('header-signout')?.addEventListener('click', handleSignOut);
+
+  document.getElementById('header-profile-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('header-profile-menu')?.classList.toggle('hidden');
+  });
+  document.addEventListener('click', () => document.getElementById('header-profile-menu')?.classList.add('hidden'));
+
+  document.querySelectorAll('[data-nav-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-nav-toggle');
+      const item = NAV.find(n => n.path === key);
+      if (item && item.children) {
+        navigateTo(item.children[0].path);
+      } else {
+        navigateTo(key);
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-route]').forEach(n => {
+    n.addEventListener('click', (e) => {
+      e.preventDefault();
+      navigateTo(n.getAttribute('data-route'));
+    });
+  });
+}
+
+function toggleSidebar(open) {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  if (!sb || !bd) return;
+  sb.classList.toggle('-translate-x-full', !open);
+  bd.classList.toggle('hidden', !open);
+}
+
+async function handleSignOut() {
+  try { await signOut(auth); } catch (e) { console.error(e); }
+}
+
+/* ==========================================================================
+   ROUTING + PAGE CONTENT
+   ========================================================================== */
+function navigateTo(path) {
+  window.location.hash = `#/${path}`;
+}
+
+function currentPathFromHash() {
+  const h = window.location.hash || '#/dashboard';
+  return h.replace(/^#\//, '') || 'dashboard';
+}
+
+function buildBreadcrumb(topItem, childItem) {
+  const parts = [];
+  if (topItem) parts.push(topItem.name);
+  if (childItem && childItem.name !== (topItem && topItem.name)) parts.push(childItem.name);
+  const bc = document.getElementById('breadcrumb');
+  if (bc) bc.innerHTML = parts.map((p, i) =>
+    `<span class="${i === parts.length - 1 ? 'text-charcoal font-medium' : ''}">${p}</span>`
+  ).join(' <span class="text-borderc">/</span> ');
+}
+
+function renderRoute() {
+  if (!currentUser) return; // guarded elsewhere
+  const path = currentPathFromHash();
+
+  // Standby / future module check (not in NAV, reached only via config)
+  const standbyKey = Object.keys(STANDBY_MODULES).find(k => path === `future/${k}`);
+  if (standbyKey) {
+    renderModuleNotAvailable(STANDBY_MODULES[standbyKey].name);
+    return;
+  }
+
+  const match = findNavByPath(path);
+  if (!match) {
+    renderEmptyContent('Page Not Found', 'The page you requested does not exist.');
+    buildBreadcrumb(null, null);
+    return;
+  }
+
+  const { item, child } = match;
+
+  if (!canAccess(item.path)) {
+    renderNoAccess(item.name);
+    buildBreadcrumb(item, child);
+    return;
+  }
+
+  setActiveNav(path, item);
+  buildBreadcrumb(item, child);
+
+  if (path === 'dashboard') {
+    renderDashboard();
+    return;
+  }
+
+  const title = child ? child.name : item.name;
+  const description = child ? child.description : item.description;
+  renderPlaceholderPage(title, description, item.name);
+}
+
+function setActiveNav(path, topItem) {
+  document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+  const link = document.querySelector(`[data-route="${path}"]`);
+  if (link) link.classList.add('active');
+  // also highlight the group toggle button if this is a top-level-only item (Dashboard)
+  if (!topItem.children) {
+    const btn = document.querySelector(`[data-nav-toggle="${topItem.path}"]`);
+    if (btn) btn.classList.add('active');
+  } else {
+    // expand the group containing this route
+    const group = document.querySelector(`[data-nav-children="${topItem.path}"]`);
+    if (group) group.style.maxHeight = group.scrollHeight + 'px';
+  }
+}
+
+function contentWrap(inner) {
+  const c = document.getElementById('content');
+  if (c) c.innerHTML = `<div class="fade-in max-w-6xl">${inner}</div>`;
+}
+
+function renderDashboard() {
+  const cards = [
+    { label: 'Cash Position', value: '₱ 4,285,300', icon: 'wallet', tone: 'text-forest' },
+    { label: 'Accounts Receivable', value: '₱ 1,972,450', icon: 'arrow-down-to-line', tone: 'text-charcoal' },
+    { label: 'Accounts Payable', value: '₱ 863,120', icon: 'arrow-up-from-line', tone: 'text-charcoal' },
+    { label: 'Current Month Revenue', value: '₱ 3,104,880', icon: 'trending-up', tone: 'text-forest' },
+    { label: 'Pending Approvals', value: '12', icon: 'clock', tone: 'text-charcoal' },
+    { label: 'Open Purchase Orders', value: '27', icon: 'shopping-cart', tone: 'text-charcoal' },
+    { label: 'Outstanding Invoices', value: '34', icon: 'receipt', tone: 'text-charcoal' },
+  ];
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Dashboard</h1>
+      <p class="text-sm text-muted mt-1">Sample placeholder values shown below. This view will connect to live Firestore data in a future phase.</p>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      ${cards.map(c => `
+        <div class="card p-5">
+          <div class="flex items-start justify-between">
+            <p class="text-xs font-medium text-muted uppercase tracking-wide">${c.label}</p>
+            <div class="w-8 h-8 rounded-md bg-cream flex items-center justify-center ${c.tone}">${icon(c.icon, 'w-4 h-4')}</div>
+          </div>
+          <p class="text-2xl font-semibold text-charcoal mt-3">${c.value}</p>
+        </div>`).join('')}
+    </div>
+
+    <div class="mt-8 card p-6">
+      <div class="flex items-center gap-3 text-muted">
+        ${icon('info', 'w-5 h-5 shrink-0')}
+        <p class="text-sm">This is Phase 1 of ${APP_NAME}. Modules below are navigation and UI placeholders only — accounting logic, calculations and live data connections are built module-by-module in future phases.</p>
+      </div>
+    </div>`);
+  refreshIcons();
+}
+
+function renderPlaceholderPage(title, description, sectionName) {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">${title}</h1>
+      ${description ? `<p class="text-sm text-muted mt-1 max-w-2xl">${description}</p>` : ''}
+    </div>
+    <div class="card flex flex-col items-center justify-center text-center py-20 px-6">
+      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">
+        ${icon('hammer', 'w-6 h-6')}
+      </div>
+      <h2 class="text-base font-medium text-charcoal">Module coming soon</h2>
+      <p class="text-sm text-muted mt-1.5 max-w-sm">${sectionName} — ${title} will be built out in a future phase of ${APP_NAME}.</p>
+    </div>`);
+  refreshIcons();
+}
+
+function renderModuleNotAvailable(name) {
+  contentWrap(`
+    <div class="min-h-[60vh] flex flex-col items-center justify-center text-center">
+      <div class="w-16 h-16 rounded-full bg-cream flex items-center justify-center text-forest mb-5">
+        ${icon('lock', 'w-7 h-7')}
+      </div>
+      <h1 class="text-lg font-semibold text-charcoal">Module Not Available</h1>
+      <p class="text-sm text-muted mt-2 max-w-sm">${name ? `"${name}" is` : 'This module is'} currently under development and will be available in a future release.</p>
+      <a href="#/dashboard" class="mt-6 btn-back inline-flex items-center gap-2 rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark">
+        ${icon('arrow-left', 'w-4 h-4')} Back to Dashboard
+      </a>
+    </div>`);
+  refreshIcons();
+}
+
+function renderNoAccess(name) {
+  contentWrap(`
+    <div class="min-h-[60vh] flex flex-col items-center justify-center text-center">
+      <div class="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center text-red-500 mb-5">
+        ${icon('shield-alert', 'w-7 h-7')}
+      </div>
+      <h1 class="text-lg font-semibold text-charcoal">Access Restricted</h1>
+      <p class="text-sm text-muted mt-2 max-w-sm">Your current role does not have access to ${name}.</p>
+      <a href="#/dashboard" class="mt-6 inline-flex items-center gap-2 rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark">
+        ${icon('arrow-left', 'w-4 h-4')} Back to Dashboard
+      </a>
+    </div>`);
+  refreshIcons();
+}
+
+function renderEmptyContent(title, msg) {
+  contentWrap(`
+    <div class="min-h-[60vh] flex flex-col items-center justify-center text-center">
+      <h1 class="text-lg font-semibold text-charcoal">${title}</h1>
+      <p class="text-sm text-muted mt-2">${msg}</p>
+      <a href="#/dashboard" class="mt-6 inline-flex items-center gap-2 rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark">Back to Dashboard</a>
+    </div>`);
+}
+
+/* ==========================================================================
+   AUTH BOOTSTRAP
+   ========================================================================== */
+async function ensureUserProfile(user) {
+  const ref = doc(db, 'users', user.uid);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    return snap.data();
+  }
+  // First-time sign-in: create a default profile. Adjust role manually in
+  // Firestore (or via Settings > Users & Roles once that module is built).
+  const profile = {
+    name: user.email.split('@')[0],
+    email: user.email,
+    role: 'finance_staff',
+    department: 'Finance',
+    isActive: true,
+    createdAt: serverTimestamp(),
+  };
+  await setDoc(ref, profile);
+  return profile;
+}
+
+function initRouter() {
+  window.addEventListener('hashchange', renderRoute);
+  if (!window.location.hash) window.location.hash = '#/dashboard';
+  renderRoute();
+}
+
+async function bootstrap() {
+  if (!firebaseReady) {
+    renderLogin();
+    return;
+  }
+  renderLoading();
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      currentUser = user;
+      try {
+        currentProfile = await ensureUserProfile(user);
+      } catch (e) {
+        console.error('Could not load/create user profile:', e);
+        currentProfile = { name: user.email, email: user.email, role: 'finance_staff', department: 'Finance', isActive: true };
+      }
+      renderShell();
+      initRouter();
+    } else {
+      currentUser = null;
+      currentProfile = null;
+      renderLogin();
+    }
+  });
+}
+
+bootstrap();
+</script>
+</body>
+</html>
