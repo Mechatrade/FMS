@@ -60,7 +60,8 @@ import {
   sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, serverTimestamp
+  getFirestore, doc, getDoc, setDoc, serverTimestamp,
+  collection, query, limit, getDocs
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ==========================================================================
@@ -746,13 +747,26 @@ async function ensureUserProfile(user) {
   if (snap.exists()) {
     return snap.data();
   }
-  // First-time sign-in: create a default profile. Adjust role manually in
-  // Firestore (or via Settings > Users & Roles once that module is built).
+
+  // First-time sign-in: figure out if this is the very first account ever
+  // created in this Firebase project. If the users collection is empty,
+  // this account becomes the system admin (full access to every module).
+  // Every account after that defaults to finance_staff — adjust roles
+  // manually in Firestore (or via Settings > Users & Roles once that
+  // module is built) as needed.
+  let isFirstUser = false;
+  try {
+    const existing = await getDocs(query(collection(db, 'users'), limit(1)));
+    isFirstUser = existing.empty;
+  } catch (e) {
+    console.warn('Could not check for existing users, defaulting role to finance_staff.', e);
+  }
+
   const profile = {
     name: user.email.split('@')[0],
     email: user.email,
-    role: 'finance_staff',
-    department: 'Finance',
+    role: isFirstUser ? 'super_admin' : 'finance_staff',
+    department: isFirstUser ? 'Administration' : 'Finance',
     isActive: true,
     createdAt: serverTimestamp(),
   };
