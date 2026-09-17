@@ -56,7 +56,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
   sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
@@ -80,12 +80,12 @@ const COMPANY_NAME = "Mechatrade Industrial Solutions Inc.";
    (see firestore.rules), not from hiding this object.
 */
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyB9HYovQjg_a8UsWnYtMILmJNU7ihPJ-zw",
+  authDomain: "mechatrade-fms.firebaseapp.com",
+  projectId: "mechatrade-fms",
+  storageBucket: "mechatrade-fms.firebasestorage.app",
+  messagingSenderId: "387044143109",
+  appId: "1:387044143109:web:1c19905d2c6fcc017bec6c"
 };
 
 let app, auth, db;
@@ -275,7 +275,9 @@ function renderLoading() {
     </div>`;
 }
 
-function renderLogin(errorMsg = "") {
+function renderLogin(mode = "signin") {
+  const isSignup = mode === "signup";
+
   root.innerHTML = `
     <div class="min-h-screen flex items-center justify-center bg-cream px-4">
       <div class="w-full max-w-md">
@@ -285,7 +287,7 @@ function renderLogin(errorMsg = "") {
               <span class="text-cream font-bold text-xl">M</span>
             </div>
             <h1 class="text-lg font-semibold text-charcoal text-center">${APP_NAME}</h1>
-            <p class="text-sm text-muted mt-1">Sign in to continue</p>
+            <p class="text-sm text-muted mt-1">${isSignup ? 'Create your account' : 'Sign in to continue'}</p>
           </div>
 
           ${!firebaseReady ? `
@@ -295,6 +297,14 @@ function renderLogin(errorMsg = "") {
 
           <form id="login-form" class="space-y-4">
             <div id="login-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+            ${isSignup ? `
+            <div>
+              <label class="block text-sm font-medium text-charcoal mb-1.5">Full Name</label>
+              <input id="login-name" type="text" required autocomplete="name"
+                class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
+                placeholder="Juan Dela Cruz" />
+            </div>` : ''}
 
             <div>
               <label class="block text-sm font-medium text-charcoal mb-1.5">Email</label>
@@ -306,27 +316,43 @@ function renderLogin(errorMsg = "") {
             <div>
               <label class="block text-sm font-medium text-charcoal mb-1.5">Password</label>
               <div class="relative">
-                <input id="login-password" type="password" required autocomplete="current-password"
+                <input id="login-password" type="password" required autocomplete="${isSignup ? 'new-password' : 'current-password'}"
                   class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
                   placeholder="••••••••" />
                 <button type="button" id="toggle-password" class="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-charcoal">
                   ${icon('eye', 'w-4 h-4')}
                 </button>
               </div>
+              ${isSignup ? `<p class="text-xs text-muted mt-1.5">At least 6 characters.</p>` : ''}
             </div>
 
+            ${isSignup ? `
+            <div>
+              <label class="block text-sm font-medium text-charcoal mb-1.5">Confirm Password</label>
+              <input id="login-password-confirm" type="password" required autocomplete="new-password"
+                class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
+                placeholder="••••••••" />
+            </div>` : ''}
+
+            ${!isSignup ? `
             <div class="flex items-center justify-between text-sm">
               <label class="flex items-center gap-2 text-muted cursor-pointer select-none">
                 <input id="login-remember" type="checkbox" class="rounded border-borderc text-forest focus:ring-forest" />
                 Remember me
               </label>
               <button type="button" id="forgot-link" class="text-forest hover:underline">Forgot password?</button>
-            </div>
+            </div>` : ''}
 
             <button id="login-submit" type="submit" class="w-full inline-flex items-center justify-center rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark transition-colors disabled:opacity-60">
-              <span id="login-submit-text">Sign In</span>
+              <span id="login-submit-text">${isSignup ? 'Create Account' : 'Sign In'}</span>
             </button>
           </form>
+
+          <p class="text-center text-sm text-muted mt-5">
+            ${isSignup
+              ? `Already have an account? <button type="button" id="mode-toggle" class="text-forest font-medium hover:underline">Sign in</button>`
+              : `Don't have an account yet? <button type="button" id="mode-toggle" class="text-forest font-medium hover:underline">Create one</button>`}
+          </p>
         </div>
         <p class="text-center text-xs text-muted mt-6">${COMPANY_NAME}</p>
       </div>
@@ -337,43 +363,91 @@ function renderLogin(errorMsg = "") {
   const pwInput = document.getElementById('login-password');
   document.getElementById('toggle-password').addEventListener('click', () => {
     pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
+    const confirmInput = document.getElementById('login-password-confirm');
+    if (confirmInput) confirmInput.type = pwInput.type;
     refreshIcons();
   });
 
-  document.getElementById('forgot-link').addEventListener('click', async () => {
-    const email = document.getElementById('login-email').value.trim();
-    if (!email) { showLoginError('Enter your email above first, then click "Forgot password?" again.'); return; }
-    try {
-      await sendPasswordResetEmail(auth, email);
-      showLoginError('Password reset email sent. Check your inbox.', true);
-    } catch (e) {
-      showLoginError(friendlyAuthError(e));
-    }
+  document.getElementById('mode-toggle').addEventListener('click', () => {
+    renderLogin(isSignup ? 'signin' : 'signup');
   });
 
-  document.getElementById('login-form').addEventListener('submit', async (e) => {
+  const forgotLink = document.getElementById('forgot-link');
+  if (forgotLink) {
+    forgotLink.addEventListener('click', async () => {
+      const email = document.getElementById('login-email').value.trim();
+      if (!email) { showLoginError('Enter your email above first, then click "Forgot password?" again.'); return; }
+      try {
+        await sendPasswordResetEmail(auth, email);
+        showLoginError('Password reset email sent. Check your inbox.', true);
+      } catch (e) {
+        showLoginError(friendlyAuthError(e));
+      }
+    });
+  }
+
+  document.getElementById('login-form').addEventListener('submit', (e) => {
     e.preventDefault();
-    const email = document.getElementById('login-email').value.trim();
-    const password = document.getElementById('login-password').value;
-    const remember = document.getElementById('login-remember').checked;
-    const btn = document.getElementById('login-submit');
-    const btnText = document.getElementById('login-submit-text');
-
-    if (!firebaseReady) { showLoginError('Firebase is not configured. See the firebaseConfig object near the top of this file.'); return; }
-
-    btn.disabled = true;
-    btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
-
-    try {
-      await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
-      await signInWithEmailAndPassword(auth, email, password);
-      // onAuthStateChanged will take over rendering
-    } catch (err) {
-      showLoginError(friendlyAuthError(err));
-      btn.disabled = false;
-      btnText.textContent = 'Sign In';
-    }
+    if (isSignup) { handleSignUp(); } else { handleSignIn(); }
   });
+}
+
+async function handleSignIn() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const remember = document.getElementById('login-remember').checked;
+  const btn = document.getElementById('login-submit');
+  const btnText = document.getElementById('login-submit-text');
+
+  if (!firebaseReady) { showLoginError('Firebase is not configured. See the firebaseConfig object near the top of this file.'); return; }
+
+  btn.disabled = true;
+  btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+
+  try {
+    await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+    await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged will take over rendering
+  } catch (err) {
+    showLoginError(friendlyAuthError(err));
+    btn.disabled = false;
+    btnText.textContent = 'Sign In';
+  }
+}
+
+async function handleSignUp() {
+  const name = document.getElementById('login-name').value.trim();
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const confirmPassword = document.getElementById('login-password-confirm').value;
+  const btn = document.getElementById('login-submit');
+  const btnText = document.getElementById('login-submit-text');
+
+  if (!firebaseReady) { showLoginError('Firebase is not configured. See the firebaseConfig object near the top of this file.'); return; }
+  if (password !== confirmPassword) { showLoginError('Passwords do not match.'); return; }
+  if (password.length < 6) { showLoginError('Password must be at least 6 characters.'); return; }
+
+  btn.disabled = true;
+  btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+
+  try {
+    const isFirstUser = await isFirstAccount();
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    await setDoc(doc(db, 'users', cred.user.uid), {
+      name: name || email.split('@')[0],
+      email,
+      role: isFirstUser ? 'super_admin' : 'finance_staff',
+      department: isFirstUser ? 'Administration' : 'Finance',
+      isActive: true,
+      createdAt: serverTimestamp(),
+    });
+    // onAuthStateChanged will take over rendering; ensureUserProfile will
+    // find this doc already created and just use it.
+  } catch (err) {
+    showLoginError(friendlyAuthError(err));
+    btn.disabled = false;
+    btnText.textContent = 'Create Account';
+  }
 }
 
 function showLoginError(msg, isSuccess = false) {
@@ -396,6 +470,9 @@ function friendlyAuthError(err) {
     'auth/wrong-password': 'Incorrect password.',
     'auth/invalid-credential': 'Incorrect email or password.',
     'auth/too-many-requests': 'Too many attempts. Please wait and try again.',
+    'auth/email-already-in-use': 'An account with that email already exists. Try signing in instead.',
+    'auth/weak-password': 'Password must be at least 6 characters.',
+    'auth/api-key-not-valid.-please-pass-a-valid-api-key.': 'Firebase rejected the API key in firebaseConfig. Double-check you copied it exactly from Project Settings > General > Your apps, with no missing characters or quotes.',
   };
   return map[code] || (err && err.message) || 'Something went wrong. Please try again.';
 }
@@ -741,6 +818,16 @@ function renderEmptyContent(title, msg) {
 /* ==========================================================================
    AUTH BOOTSTRAP
    ========================================================================== */
+async function isFirstAccount() {
+  try {
+    const existing = await getDocs(query(collection(db, 'users'), limit(1)));
+    return existing.empty;
+  } catch (e) {
+    console.warn('Could not check for existing users, defaulting role to finance_staff.', e);
+    return false;
+  }
+}
+
 async function ensureUserProfile(user) {
   const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
@@ -748,20 +835,10 @@ async function ensureUserProfile(user) {
     return snap.data();
   }
 
-  // First-time sign-in: figure out if this is the very first account ever
-  // created in this Firebase project. If the users collection is empty,
-  // this account becomes the system admin (full access to every module).
-  // Every account after that defaults to finance_staff — adjust roles
-  // manually in Firestore (or via Settings > Users & Roles once that
-  // module is built) as needed.
-  let isFirstUser = false;
-  try {
-    const existing = await getDocs(query(collection(db, 'users'), limit(1)));
-    isFirstUser = existing.empty;
-  } catch (e) {
-    console.warn('Could not check for existing users, defaulting role to finance_staff.', e);
-  }
-
+  // Reached only if a profile doc wasn't already created at sign-up time
+  // (e.g. an account created directly in the Firebase console). Same
+  // first-account-becomes-admin rule applies here too.
+  const isFirstUser = await isFirstAccount();
   const profile = {
     name: user.email.split('@')[0],
     email: user.email,
