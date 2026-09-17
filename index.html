@@ -44,6 +44,10 @@
   ::-webkit-scrollbar-thumb { background: #d8d2c2; border-radius: 8px; }
   .nav-link.active { background: #1F3A2E; color: #fff; }
   .nav-link.active svg { color: #fff; }
+  .nav-children { max-height: 0; overflow: hidden; transition: max-height .25s ease; }
+  .nav-group.expanded > .nav-children { max-height: 600px; }
+  .nav-chevron { transition: transform .2s ease; }
+  .nav-group.expanded .nav-chevron { transform: rotate(180deg); }
   .fade-in { animation: fadeIn .18s ease-out; }
   @keyframes fadeIn { from { opacity:0; transform: translateY(2px);} to {opacity:1; transform:translateY(0);} }
   [data-page]:not(.active-page) { display:none; }
@@ -215,14 +219,14 @@ const STANDBY_MODULES = {
   analytics:  { name: "Business Analytics",       icon: "trending-up",   enabled: false },
 };
 
-// role -> which top-level module paths are visible. Missing keys default to
-// visible (true); only list the ones a role should NOT see.
+// role -> which top-level module paths are visible. Empty for now (every
+// signed-in user sees every module) until real per-role access is defined.
 const ROLE_PERMISSIONS = {
   super_admin:     {},
-  finance_manager: { administration: false, settings: false },
-  finance_staff:   { procurement: false, installation: false, "budget-forecast": false, approvals: false, administration: false, settings: false },
-  admin:           { "client-orders": false, finance: false, billing: false, procurement: false, installation: false, "cash-management": false, reports: false, "budget-forecast": false, approvals: false },
-  management:      { settings: false },
+  finance_manager: {},
+  finance_staff:   {},
+  admin:           {},
+  management:      {},
 };
 
 let currentUser = null;
@@ -612,7 +616,8 @@ function wireShellEvents() {
       const key = btn.getAttribute('data-nav-toggle');
       const item = NAV.find(n => n.path === key);
       if (item && item.children) {
-        navigateTo(item.children[0].path);
+        const group = document.querySelector(`.nav-group[data-nav-key="${key}"]`);
+        if (group) group.classList.toggle('expanded');
       } else {
         navigateTo(key);
       }
@@ -708,11 +713,11 @@ function setActiveNav(path, topItem) {
   if (!topItem.children) {
     const btn = document.querySelector(`[data-nav-toggle="${topItem.path}"]`);
     if (btn) btn.classList.add('active');
-  } else {
-    // expand the group containing this route
-    const group = document.querySelector(`[data-nav-children="${topItem.path}"]`);
-    if (group) group.style.maxHeight = group.scrollHeight + 'px';
   }
+  // accordion: expand the group containing the current route, collapse the rest
+  document.querySelectorAll('.nav-group').forEach(g => {
+    g.classList.toggle('expanded', g.getAttribute('data-nav-key') === topItem.path && !!topItem.children);
+  });
 }
 
 function contentWrap(inner) {
