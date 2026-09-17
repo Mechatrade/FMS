@@ -64,8 +64,8 @@ import {
   sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, serverTimestamp,
-  collection, query, limit, getDocs
+  getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, serverTimestamp,
+  collection, query, where, orderBy, limit, getDocs, Timestamp
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ==========================================================================
@@ -110,14 +110,13 @@ const NAV = [
   { name: "Dashboard", icon: "layout-dashboard", path: "dashboard" },
   {
     name: "Client Orders", icon: "package", path: "client-orders",
-    description: "Client purchase orders — from receipt through fulfillment to billing readiness.",
+    description: "Client purchase orders — from receipt through delivery to billing readiness.",
     children: [
       { name: "Purchase Order Monitoring", path: "client-orders/po-monitoring", description: "Track PO status end to end." },
       { name: "New Client PO", path: "client-orders/new-po", description: "Record a new client purchase order." },
       { name: "Open POs", path: "client-orders/open-pos", description: "View all currently open purchase orders." },
-      { name: "Fulfillment", path: "client-orders/fulfillment", description: "Track fulfillment against client POs." },
       { name: "Delivery / Service", path: "client-orders/delivery-service", description: "Track delivery or service completion." },
-      { name: "Ready for Billing", path: "client-orders/ready-for-billing", description: "POs fulfilled and ready to invoice." },
+      { name: "Ready for Billing", path: "client-orders/ready-for-billing", description: "POs delivered and ready to invoice." },
       { name: "PO Reports", path: "client-orders/po-reports", description: "Reporting on client purchase order activity." },
     ]
   },
@@ -677,6 +676,16 @@ function renderRoute() {
     return;
   }
 
+  // Dynamic route: editing a single Client PO (not in NAV, has an id in the path)
+  if (path.startsWith('client-orders/edit/')) {
+    if (!canAccess('client-orders')) { renderNoAccess('Client Orders'); buildBreadcrumb(null, null); return; }
+    const poId = path.substring('client-orders/edit/'.length);
+    setActiveNav('client-orders/open-pos', NAV.find(n => n.path === 'client-orders')); // best-effort highlight
+    buildBreadcrumb(NAV.find(n => n.path === 'client-orders'), { name: 'Edit Client PO' });
+    renderClientPOEditPage(poId);
+    return;
+  }
+
   const match = findNavByPath(path);
   if (!match) {
     renderEmptyContent('Page Not Found', 'The page you requested does not exist.');
@@ -697,6 +706,20 @@ function renderRoute() {
 
   if (path === 'dashboard') {
     renderDashboard();
+    return;
+  }
+
+  // Client Orders module — real pages instead of placeholders
+  const clientOrderPages = {
+    'client-orders/po-monitoring': renderPOMonitoringPage,
+    'client-orders/new-po': renderNewClientPOPage,
+    'client-orders/open-pos': renderOpenPOsPage,
+    'client-orders/delivery-service': renderDeliveryServicePage,
+    'client-orders/ready-for-billing': renderReadyForBillingPage,
+    'client-orders/po-reports': renderPOReportsPage,
+  };
+  if (clientOrderPages[path]) {
+    clientOrderPages[path]();
     return;
   }
 
@@ -814,6 +837,699 @@ function renderEmptyContent(title, msg) {
       <p class="text-sm text-muted mt-2">${msg}</p>
       <a href="#/dashboard" class="mt-6 inline-flex items-center gap-2 rounded-md bg-forest px-4 py-2.5 text-sm font-medium text-white hover:bg-forest-dark">Back to Dashboard</a>
     </div>`);
+}
+
+/* ==========================================================================
+   CLIENT ORDERS MODULE  (Firestore-backed: collection "clientPOs")
+   ========================================================================== */
+const PO_COLLECTION = 'clientPOs';
+const PO_STATUSES = ['Open', 'Preparing', 'Partial Delivery', 'Complete Delivery', 'Ready for Billing', 'On Hold', 'Cancelled'];
+const PO_OPEN_STATUSES = ['Open', 'Preparing'];
+const PO_DELIVERY_STATUSES = ['Preparing', 'Partial Delivery', 'Complete Delivery'];
+const PO_OPEN_QUICK_STATUSES = ['Open', 'Preparing', 'On Hold', 'Cancelled'];
+const PO_DELIVERY_QUICK_STATUSES = ['Preparing', 'Partial Delivery', 'Complete Delivery', 'On Hold', 'Cancelled'];
+const PO_TYPES = ['Goods', 'Service', 'Installation'];
+const PO_PRIORITIES = ['Normal', 'Urgent'];
+
+function statusBadgeClass(status) {
+  const map = {
+    'Open': 'bg-blue-50 text-blue-700 border-blue-200',
+    'Preparing': 'bg-amber-50 text-amber-700 border-amber-200',
+    'Partial Delivery': 'bg-orange-50 text-orange-700 border-orange-200',
+    'Complete Delivery': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Ready for Billing': 'bg-forest/10 text-forest border-forest/30',
+    'On Hold': 'bg-gray-100 text-gray-600 border-gray-300',
+    'Cancelled': 'bg-red-50 text-red-600 border-red-200',
+  };
+  return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
+}
+function statusBadge(status) {
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadgeClass(status)}">${status || '—'}</span>`;
+}
+function formatCurrency(amount) {
+  const n = Number(amount) || 0;
+  return '₱ ' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function formatDate(value) {
+  if (!value) return '—';
+  const d = typeof value === 'string' ? new Date(value + 'T00:00:00') : value;
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function todayISO() {
+  const d = new Date();
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0, 10);
+}
+function calcCommitmentDate(dateReceivedISO, leadTimeValue, leadTimeUnit) {
+  if (!dateReceivedISO || !leadTimeValue) return '';
+  const days = leadTimeUnit === 'weeks' ? Number(leadTimeValue) * 7 : Number(leadTimeValue);
+  if (isNaN(days)) return '';
+  const d = new Date(dateReceivedISO + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0, 10);
+}
+function isOverdue(po) {
+  if (!po.commitmentDeliveryDate) return false;
+  if (['Complete Delivery', 'Ready for Billing', 'Cancelled'].includes(po.status)) return false;
+  return po.commitmentDeliveryDate < todayISO();
+}
+function escapeAttr(str) {
+  return String(str == null ? '' : str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+/* ---- Data access ---- */
+async function fetchClientPOs() {
+  const snap = await getDocs(query(collection(db, PO_COLLECTION), orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function fetchClientPO(id) {
+  const snap = await getDoc(doc(db, PO_COLLECTION, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+async function createClientPO(data) {
+  return addDoc(collection(db, PO_COLLECTION), {
+    ...data,
+    createdAt: serverTimestamp(),
+    createdBy: currentUser ? currentUser.email : null,
+    updatedAt: serverTimestamp(),
+    updatedBy: currentUser ? currentUser.email : null,
+  });
+}
+async function updateClientPO(id, data) {
+  return updateDoc(doc(db, PO_COLLECTION, id), {
+    ...data,
+    updatedAt: serverTimestamp(),
+    updatedBy: currentUser ? currentUser.email : null,
+  });
+}
+
+/* ---- Reusable form field builders ---- */
+function textField(name, label, opts = {}) {
+  const span = opts.span2 ? 'sm:col-span-2' : '';
+  return `
+    <div class="${span}">
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label}${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="field-${name}" type="text" ${opts.required ? 'required' : ''} value="${escapeAttr(opts.value)}" placeholder="${escapeAttr(opts.placeholder)}"
+        class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      ${opts.hint ? `<p class="text-xs text-muted mt-1.5">${opts.hint}</p>` : ''}
+    </div>`;
+}
+function numberField(name, label, opts = {}) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label}${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="field-${name}" type="number" step="${opts.step || '1'}" min="0" ${opts.required ? 'required' : ''} value="${opts.value != null && opts.value !== '' ? opts.value : ''}"
+        class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>`;
+}
+function dateField(name, label, opts = {}) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label}${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="field-${name}" type="date" ${opts.required ? 'required' : ''} value="${opts.value || ''}"
+        class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>`;
+}
+function selectField(name, label, options, opts = {}) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label}${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <select id="field-${name}" ${opts.required ? 'required' : ''} class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        ${!opts.value ? '<option value="">Select...</option>' : ''}
+        ${options.map(o => `<option value="${o}" ${opts.value === o ? 'selected' : ''}>${o}</option>`).join('')}
+      </select>
+    </div>`;
+}
+function textareaField(name, label, opts = {}) {
+  const span = opts.span2 ? 'sm:col-span-2' : '';
+  return `
+    <div class="${span}">
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label}</label>
+      <textarea id="field-${name}" rows="${opts.rows || 3}" placeholder="${escapeAttr(opts.placeholder)}"
+        class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">${opts.value || ''}</textarea>
+      ${opts.hint ? `<p class="text-xs text-muted mt-1.5">${opts.hint}</p>` : ''}
+    </div>`;
+}
+function wirePOFormAutoCalc() {
+  const recalc = () => {
+    const dateReceived = document.getElementById('field-dateReceived')?.value;
+    const leadTimeValue = document.getElementById('field-leadTimeValue')?.value;
+    const leadTimeUnit = document.getElementById('field-leadTimeUnit')?.value;
+    const commitField = document.getElementById('field-commitmentDeliveryDate');
+    if (commitField && dateReceived && leadTimeValue) {
+      commitField.value = calcCommitmentDate(dateReceived, leadTimeValue, leadTimeUnit);
+    }
+  };
+  ['field-dateReceived', 'field-leadTimeValue', 'field-leadTimeUnit'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', recalc);
+  });
+}
+function readPOFormValues() {
+  const val = (id) => { const el = document.getElementById('field-' + id); return el ? el.value.trim() : ''; };
+  return {
+    clientName: val('clientName'),
+    clientPONumber: val('clientPONumber'),
+    poType: val('poType'),
+    priority: val('priority') || 'Normal',
+    projectDescription: val('projectDescription'),
+    poAmount: Number(val('poAmount')) || 0,
+    dateReceived: val('dateReceived'),
+    leadTimeValue: val('leadTimeValue') ? Number(val('leadTimeValue')) : null,
+    leadTimeUnit: val('leadTimeUnit') || 'days',
+    commitmentDeliveryDate: val('commitmentDeliveryDate'),
+    clientContactPerson: val('clientContactPerson'),
+    clientContactNumber: val('clientContactNumber'),
+    salesPerson: val('salesPerson'),
+    paymentTerms: val('paymentTerms'),
+    poDocumentReference: val('poDocumentReference'),
+    notes: val('notes'),
+  };
+}
+
+/* ---- Shared list table ---- */
+function poLoadErrorHtml() {
+  return `<div class="card flex flex-col items-center justify-center text-center py-10 px-6">
+    <p class="text-sm text-red-600 font-medium">Could not load purchase orders.</p>
+    <p class="text-xs text-muted mt-1">Check your Firestore rules and connection, then refresh.</p>
+  </div>`;
+}
+function poTableHtml(pos, opts = {}) {
+  if (!pos.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">${opts.emptyMessage || 'No purchase orders found.'}</p>
+    </div>`;
+  }
+  const quickStatuses = opts.quickStatuses || null;
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client PO #</th>
+            <th class="px-4 py-3">Client</th>
+            <th class="px-4 py-3">Type</th>
+            <th class="px-4 py-3">Amount</th>
+            <th class="px-4 py-3">Date Received</th>
+            <th class="px-4 py-3">Commitment Date</th>
+            <th class="px-4 py-3">Status</th>
+            <th class="px-4 py-3">Priority</th>
+            <th class="px-4 py-3 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${pos.map(po => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${po.clientPONumber || '—'}</td>
+              <td class="px-4 py-3">${po.clientName || '—'}</td>
+              <td class="px-4 py-3">${po.poType || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+              <td class="px-4 py-3">${formatDate(po.dateReceived)}</td>
+              <td class="px-4 py-3 ${isOverdue(po) ? 'text-red-600 font-medium' : ''}">${formatDate(po.commitmentDeliveryDate)}${isOverdue(po) ? ' <span class="text-[10px] uppercase">Overdue</span>' : ''}</td>
+              <td class="px-4 py-3">
+                ${quickStatuses ? `
+                  <select data-quick-status="${po.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                    ${quickStatuses.map(s => `<option value="${s}" ${po.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+                  </select>
+                ` : statusBadge(po.status)}
+              </td>
+              <td class="px-4 py-3">${po.priority === 'Urgent' ? '<span class="text-red-600 font-medium">Urgent</span>' : 'Normal'}</td>
+              <td class="px-4 py-3 text-right"><a href="#/client-orders/edit/${po.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireQuickStatusSelects(onChangeReload) {
+  document.querySelectorAll('[data-quick-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.getAttribute('data-quick-status');
+      const newStatus = sel.value;
+      sel.disabled = true;
+      try {
+        await updateClientPO(id, { status: newStatus });
+        await onChangeReload();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update status. Please try again.');
+        sel.disabled = false;
+      }
+    });
+  });
+}
+
+/* ---- Pages ---- */
+function renderNewClientPOPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Client PO</h1>
+      <p class="text-sm text-muted mt-1">Record a new client purchase order. Status starts as <span class="font-medium text-charcoal">Open</span>.</p>
+    </div>
+    <form id="po-form" class="card p-6 space-y-6 max-w-4xl">
+      <div id="po-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('clientName', 'Client Name', { required: true })}
+          ${textField('clientPONumber', 'Client PO Number', { required: true, hint: 'The PO number the client issued — this is our reference.' })}
+          ${selectField('poType', 'PO Type', PO_TYPES, { required: true })}
+          ${selectField('priority', 'Priority', PO_PRIORITIES, { value: 'Normal' })}
+          ${textField('projectDescription', 'Project / Reference / Description', { span2: true })}
+          ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01' })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${dateField('dateReceived', 'PO Date Received', { required: true, value: todayISO() })}
+          <div>
+            <label class="block text-sm font-medium text-charcoal mb-1.5">Lead Time</label>
+            <div class="flex gap-2">
+              <input id="field-leadTimeValue" type="number" min="0" placeholder="e.g. 2"
+                class="w-1/2 rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+              <select id="field-leadTimeUnit" class="w-1/2 rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+                <option value="days">Days</option>
+                <option value="weeks">Weeks</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-charcoal mb-1.5">Commitment Delivery Date</label>
+            <input id="field-commitmentDeliveryDate" type="date" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+            <p class="text-xs text-muted mt-1.5">Auto-calculated from PO Date Received + Lead Time. You can adjust it manually.</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Contact & Ownership</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${textField('clientContactPerson', 'Client Contact Person')}
+          ${textField('clientContactNumber', 'Client Contact Number')}
+          ${textField('salesPerson', 'Sales Person / Account Manager')}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('paymentTerms', 'Payment Terms', { placeholder: 'e.g. 30 days, COD, 50% down' })}
+          ${textField('poDocumentReference', 'PO Document Reference', { placeholder: 'Filename or note' })}
+          ${textareaField('notes', 'Notes', { span2: true })}
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="po-form-submit" type="submit" class="btn-primary">
+          <span id="po-form-submit-text">Save Client PO</span>
+        </button>
+        <a href="#/client-orders/open-pos" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  wirePOFormAutoCalc();
+  document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
+}
+
+async function handleCreatePOSubmit(e) {
+  e.preventDefault();
+  const btn = document.getElementById('po-form-submit');
+  const btnText = document.getElementById('po-form-submit-text');
+  const errBox = document.getElementById('po-form-error');
+  errBox.classList.add('hidden');
+
+  const data = readPOFormValues();
+  if (!data.clientName || !data.clientPONumber || !data.poType || !data.poAmount || !data.dateReceived) {
+    errBox.textContent = 'Please fill in all required fields (marked with *).';
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+
+  try {
+    data.status = 'Open';
+    await createClientPO(data);
+    navigateTo('client-orders/open-pos');
+  } catch (err) {
+    console.error(err);
+    errBox.textContent = 'Could not save this PO. Please check your connection and try again.';
+    errBox.classList.remove('hidden');
+    btn.disabled = false;
+    btnText.textContent = 'Save Client PO';
+  }
+}
+
+async function renderOpenPOsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Open POs</h1>
+        <p class="text-sm text-muted mt-1">Client POs that are Open or Preparing.</p>
+      </div>
+      <a href="#/client-orders/new-po" class="btn-primary text-sm">+ New Client PO</a>
+    </div>
+    <div id="po-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const all = await fetchClientPOs();
+    const pos = all.filter(p => PO_OPEN_STATUSES.includes(p.status));
+    document.getElementById('po-list-container').innerHTML = poTableHtml(pos, {
+      emptyMessage: 'No open purchase orders yet.',
+      quickStatuses: PO_OPEN_QUICK_STATUSES,
+    });
+    refreshIcons();
+    wireQuickStatusSelects(renderOpenPOsPage);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('po-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+async function renderDeliveryServicePage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Delivery / Service</h1>
+      <p class="text-sm text-muted mt-1">POs being prepared, partially delivered, or fully delivered. Update status as work progresses — use Edit for delivery notes and partial delivery details.</p>
+    </div>
+    <div id="po-list-container" class="text-sm text-muted">Loading...</div>`);
+  try {
+    const all = await fetchClientPOs();
+    const pos = all.filter(p => PO_DELIVERY_STATUSES.includes(p.status));
+    document.getElementById('po-list-container').innerHTML = poTableHtml(pos, {
+      emptyMessage: 'No POs currently in preparation or delivery.',
+      quickStatuses: PO_DELIVERY_QUICK_STATUSES,
+    });
+    refreshIcons();
+    wireQuickStatusSelects(renderDeliveryServicePage);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('po-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+async function renderReadyForBillingPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Ready for Billing</h1>
+      <p class="text-sm text-muted mt-1">POs with Complete Delivery are shown below — confirm to mark them Ready for Billing.</p>
+    </div>
+    <div id="po-pending-container" class="text-sm text-muted mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Confirmed Ready for Billing</h2>
+    <div id="po-confirmed-container" class="text-sm text-muted">Loading...</div>`);
+  try {
+    const all = await fetchClientPOs();
+    const pending = all.filter(p => p.status === 'Complete Delivery');
+    const confirmed = all.filter(p => p.status === 'Ready for Billing');
+
+    document.getElementById('po-pending-container').innerHTML = pending.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client PO #</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Delivered</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${pending.map(po => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${po.clientPONumber || '—'}</td>
+                <td class="px-4 py-3">${po.clientName || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+                <td class="px-4 py-3">${po.datesDelivered || '—'}</td>
+                <td class="px-4 py-3 text-right"><button data-mark-ready="${po.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Ready for Billing</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No POs currently awaiting confirmation.</div>`;
+
+    document.getElementById('po-confirmed-container').innerHTML = poTableHtml(confirmed, { emptyMessage: 'No POs marked Ready for Billing yet.' });
+    refreshIcons();
+
+    document.querySelectorAll('[data-mark-ready]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Updating...';
+        try {
+          await updateClientPO(btn.getAttribute('data-mark-ready'), { status: 'Ready for Billing' });
+          renderReadyForBillingPage();
+        } catch (e) {
+          console.error(e);
+          alert('Could not update this PO. Please try again.');
+          btn.disabled = false;
+          btn.textContent = 'Mark Ready for Billing';
+        }
+      });
+    });
+  } catch (e) {
+    console.error(e);
+    document.getElementById('po-pending-container').innerHTML = poLoadErrorHtml();
+    document.getElementById('po-confirmed-container').innerHTML = '';
+  }
+}
+
+async function renderPOReportsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">PO Reports</h1>
+      <p class="text-sm text-muted mt-1">All client purchase orders. Filter by status or search by client / PO number.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <input id="po-report-search" type="text" placeholder="Search client or PO number..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="po-report-status" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Statuses</option>
+        ${PO_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}
+      </select>
+    </div>
+    <div id="po-report-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  let allPOs = [];
+  try {
+    allPOs = await fetchClientPOs();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('po-report-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+
+  const renderFiltered = () => {
+    const search = document.getElementById('po-report-search').value.trim().toLowerCase();
+    const status = document.getElementById('po-report-status').value;
+    const filtered = allPOs.filter(po => {
+      const matchesSearch = !search || (po.clientName || '').toLowerCase().includes(search) || (po.clientPONumber || '').toLowerCase().includes(search);
+      const matchesStatus = !status || po.status === status;
+      return matchesSearch && matchesStatus;
+    });
+    document.getElementById('po-report-container').innerHTML = poTableHtml(filtered, { emptyMessage: 'No purchase orders match your filters.' });
+    refreshIcons();
+  };
+
+  renderFiltered();
+  document.getElementById('po-report-search').addEventListener('input', renderFiltered);
+  document.getElementById('po-report-status').addEventListener('change', renderFiltered);
+}
+
+async function renderPOMonitoringPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Purchase Order Monitoring</h1>
+      <p class="text-sm text-muted mt-1">Live overview of all client purchase orders.</p>
+    </div>
+    <div id="po-kpi-container" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Activity</h2>
+    <div id="po-activity-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  try {
+    const all = await fetchClientPOs();
+    const openCount = all.filter(p => PO_OPEN_STATUSES.includes(p.status)).length;
+    const inDeliveryCount = all.filter(p => PO_DELIVERY_STATUSES.includes(p.status)).length;
+    const readyCount = all.filter(p => p.status === 'Ready for Billing').length;
+    const overdueCount = all.filter(isOverdue).length;
+    const openValue = all.filter(p => !['Ready for Billing', 'Cancelled'].includes(p.status)).reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
+
+    const cards = [
+      { label: 'Open POs', value: openCount, icon: 'inbox' },
+      { label: 'In Delivery / Preparing', value: inDeliveryCount, icon: 'truck' },
+      { label: 'Ready for Billing', value: readyCount, icon: 'check-circle' },
+      { label: 'Overdue', value: overdueCount, icon: 'alert-triangle', tone: overdueCount > 0 ? 'text-red-600' : 'text-forest' },
+      { label: 'Total Open Value', value: formatCurrency(openValue), icon: 'wallet', wide: true },
+    ];
+
+    document.getElementById('po-kpi-container').innerHTML = cards.map(c => `
+      <div class="card p-5 ${c.wide ? 'sm:col-span-2' : ''}">
+        <div class="flex items-start justify-between">
+          <p class="text-xs font-medium text-muted uppercase tracking-wide">${c.label}</p>
+          <div class="w-8 h-8 rounded-md bg-cream flex items-center justify-center ${c.tone || 'text-forest'}">${icon(c.icon, 'w-4 h-4')}</div>
+        </div>
+        <p class="text-2xl font-semibold text-charcoal mt-3">${c.value}</p>
+      </div>`).join('');
+
+    const recentSorted = [...all].sort((a, b) => {
+      const at = a.updatedAt && a.updatedAt.toMillis ? a.updatedAt.toMillis() : 0;
+      const bt = b.updatedAt && b.updatedAt.toMillis ? b.updatedAt.toMillis() : 0;
+      return bt - at;
+    }).slice(0, 10);
+
+    document.getElementById('po-activity-container').innerHTML = poTableHtml(recentSorted, { emptyMessage: 'No activity yet.' });
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('po-kpi-container').innerHTML = poLoadErrorHtml();
+    document.getElementById('po-activity-container').innerHTML = '';
+  }
+}
+
+async function renderClientPOEditPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let po;
+  try {
+    po = await fetchClientPO(id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!po) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <p class="text-sm text-charcoal font-medium">PO not found.</p>
+      <a href="#/client-orders/po-reports" class="mt-4 text-sm text-forest hover:underline">Back to PO Reports</a>
+    </div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Edit Client PO</h1>
+        <p class="text-sm text-muted mt-1">${escapeAttr(po.clientPONumber)} — ${escapeAttr(po.clientName)}</p>
+      </div>
+      ${statusBadge(po.status)}
+    </div>
+    <form id="po-form" class="card p-6 space-y-6 max-w-4xl">
+      <div id="po-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('clientName', 'Client Name', { required: true, value: po.clientName })}
+          ${textField('clientPONumber', 'Client PO Number', { required: true, value: po.clientPONumber, hint: 'The PO number the client issued — this is our reference.' })}
+          ${selectField('poType', 'PO Type', PO_TYPES, { required: true, value: po.poType })}
+          ${selectField('priority', 'Priority', PO_PRIORITIES, { value: po.priority || 'Normal' })}
+          ${textField('projectDescription', 'Project / Reference / Description', { span2: true, value: po.projectDescription })}
+          ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01', value: po.poAmount })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${dateField('dateReceived', 'PO Date Received', { required: true, value: po.dateReceived })}
+          <div>
+            <label class="block text-sm font-medium text-charcoal mb-1.5">Lead Time</label>
+            <div class="flex gap-2">
+              <input id="field-leadTimeValue" type="number" min="0" value="${po.leadTimeValue != null ? po.leadTimeValue : ''}" placeholder="e.g. 2"
+                class="w-1/2 rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+              <select id="field-leadTimeUnit" class="w-1/2 rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+                <option value="days" ${po.leadTimeUnit === 'days' ? 'selected' : ''}>Days</option>
+                <option value="weeks" ${po.leadTimeUnit === 'weeks' ? 'selected' : ''}>Weeks</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-charcoal mb-1.5">Commitment Delivery Date</label>
+            <input id="field-commitmentDeliveryDate" type="date" value="${po.commitmentDeliveryDate || ''}" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+            <p class="text-xs text-muted mt-1.5">Auto-calculated from PO Date Received + Lead Time. You can adjust it manually.</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Contact & Ownership</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${textField('clientContactPerson', 'Client Contact Person', { value: po.clientContactPerson })}
+          ${textField('clientContactNumber', 'Client Contact Number', { value: po.clientContactNumber })}
+          ${textField('salesPerson', 'Sales Person / Account Manager', { value: po.salesPerson })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Status & Delivery</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${selectField('status', 'Status', PO_STATUSES, { required: true, value: po.status })}
+          ${textField('datesDelivered', 'Date(s) Delivered', { value: po.datesDelivered, placeholder: 'e.g. 12 Sep 2026 (partial), 20 Sep 2026 (final)' })}
+          ${textareaField('deliveryNotes', 'Delivery Notes', { span2: true, value: po.deliveryNotes })}
+          ${textareaField('partialDeliveryDetails', 'Partial Delivery Details', { span2: true, value: po.partialDeliveryDetails, hint: 'What has been delivered so far vs. what is pending.' })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('paymentTerms', 'Payment Terms', { value: po.paymentTerms, placeholder: 'e.g. 30 days, COD, 50% down' })}
+          ${textField('poDocumentReference', 'PO Document Reference', { value: po.poDocumentReference, placeholder: 'Filename or note' })}
+          ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
+        </div>
+      </div>
+
+      <div class="text-xs text-muted border-t border-borderc pt-4">
+        ${po.createdBy ? `Created by ${escapeAttr(po.createdBy)} · ` : ''}Last updated ${po.updatedBy ? `by ${escapeAttr(po.updatedBy)}` : '—'}
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button id="po-form-submit" type="submit" class="btn-primary">
+          <span id="po-form-submit-text">Save Changes</span>
+        </button>
+        <a href="#/client-orders/po-reports" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+
+  refreshIcons();
+  wirePOFormAutoCalc();
+  document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
+}
+
+async function handleUpdatePOSubmit(e, id) {
+  e.preventDefault();
+  const btn = document.getElementById('po-form-submit');
+  const btnText = document.getElementById('po-form-submit-text');
+  const errBox = document.getElementById('po-form-error');
+  errBox.classList.add('hidden');
+
+  const data = readPOFormValues();
+  data.status = document.getElementById('field-status').value;
+  data.datesDelivered = document.getElementById('field-datesDelivered').value.trim();
+  data.deliveryNotes = document.getElementById('field-deliveryNotes').value.trim();
+  data.partialDeliveryDetails = document.getElementById('field-partialDeliveryDetails').value.trim();
+
+  if (!data.clientName || !data.clientPONumber || !data.poType || !data.poAmount || !data.dateReceived) {
+    errBox.textContent = 'Please fill in all required fields (marked with *).';
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+
+  try {
+    await updateClientPO(id, data);
+    const dest = PO_OPEN_STATUSES.includes(data.status) ? 'client-orders/open-pos'
+      : PO_DELIVERY_STATUSES.includes(data.status) ? 'client-orders/delivery-service'
+      : data.status === 'Ready for Billing' ? 'client-orders/ready-for-billing'
+      : 'client-orders/po-reports';
+    navigateTo(dest);
+  } catch (err) {
+    console.error(err);
+    errBox.textContent = 'Could not save changes. Please check your connection and try again.';
+    errBox.classList.remove('hidden');
+    btn.disabled = false;
+    btnText.textContent = 'Save Changes';
+  }
 }
 
 /* ==========================================================================
