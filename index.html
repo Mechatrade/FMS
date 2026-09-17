@@ -105,128 +105,124 @@ try {
 const NAV = [
   { name: "Dashboard", icon: "layout-dashboard", path: "dashboard" },
   {
-    name: "Finance", icon: "wallet", path: "finance",
-    description: "Core accounting: ledgers, journal entries, receivables, payables, cash and tax.",
+    name: "Client Orders", icon: "package", path: "client-orders",
+    description: "Client purchase orders — from receipt through fulfillment to billing readiness.",
     children: [
-      { name: "Overview", path: "finance", description: "Summary of financial position and activity." },
-      { name: "Chart of Accounts", path: "finance/chart-of-accounts", description: "Manage the company's account structure." },
-      { name: "General Ledger", path: "finance/general-ledger", description: "View posted transactions across all accounts." },
-      { name: "Journal Entries", path: "finance/journal-entries", description: "Create and review manual journal entries." },
+      { name: "Purchase Order Monitoring", path: "client-orders/po-monitoring", description: "Track PO status end to end." },
+      { name: "New Client PO", path: "client-orders/new-po", description: "Record a new client purchase order." },
+      { name: "Open POs", path: "client-orders/open-pos", description: "View all currently open purchase orders." },
+      { name: "Fulfillment", path: "client-orders/fulfillment", description: "Track fulfillment against client POs." },
+      { name: "Delivery / Service", path: "client-orders/delivery-service", description: "Track delivery or service completion." },
+      { name: "Ready for Billing", path: "client-orders/ready-for-billing", description: "POs fulfilled and ready to invoice." },
+      { name: "PO Reports", path: "client-orders/po-reports", description: "Reporting on client purchase order activity." },
+    ]
+  },
+  {
+    name: "Finance", icon: "wallet", path: "finance",
+    description: "Core accounting: sales recognition, ledgers, journal entries, receivables, payables and tax.",
+    children: [
+      { name: "Sales Recognition", path: "finance/sales-recognition", description: "Recognize sales from fulfilled orders." },
       { name: "Accounts Receivable", path: "finance/accounts-receivable", description: "Track amounts owed by customers." },
       { name: "Accounts Payable", path: "finance/accounts-payable", description: "Track amounts owed to suppliers." },
       { name: "Expenses", path: "finance/expenses", description: "Record and categorize company expenses." },
-      { name: "Cash & Bank", path: "finance/cash-bank", description: "Manage cash positions and bank accounts." },
-      { name: "Tax Management", path: "finance/tax-management", description: "Track tax obligations and filings." },
+      { name: "General Ledger", path: "finance/general-ledger", description: "View posted transactions across all accounts." },
+      { name: "Journal Entries", path: "finance/journal-entries", description: "Create and review manual journal entries." },
+      { name: "Tax", path: "finance/tax", description: "Track tax obligations and filings." },
     ]
   },
   {
     name: "Billing & Collection", icon: "receipt", path: "billing",
-    description: "Client purchase orders, fulfillment, invoicing and collections.",
+    description: "Invoicing, unbilled work, collections and receivables aging.",
     children: [
-      { name: "Overview", path: "billing", description: "Summary of billing and collection activity." },
-      { name: "Client Purchase Orders", path: "billing/client-purchase-orders", description: "Manage purchase orders received from clients." },
-      { name: "Purchase Order Monitoring", path: "billing/po-monitoring", description: "Track PO status from receipt through fulfillment and invoicing." },
-      { name: "Fulfillment Tracking", path: "billing/fulfillment-tracking", description: "Track delivery / service completion against POs." },
       { name: "Invoices", path: "billing/invoices", description: "Manage client invoices." },
       { name: "Unbilled Fulfillment", path: "billing/unbilled-fulfillment", description: "Fulfilled work not yet invoiced." },
       { name: "Collections", path: "billing/collections", description: "Track collection of outstanding invoices." },
-      { name: "Accounts Receivable Aging", path: "billing/ar-aging", description: "View receivables by age bracket." },
-      { name: "Credit Notes", path: "billing/credit-notes", description: "Manage credit notes issued to clients." },
+      { name: "Official Receipts", path: "billing/official-receipts", description: "Manage official receipts issued to clients." },
+      { name: "AR Aging", path: "billing/ar-aging", description: "View receivables by age bracket." },
     ]
   },
   {
     name: "Procurement", icon: "shopping-cart", path: "procurement",
     description: "Suppliers, purchase requests, orders, receiving and payments.",
     children: [
-      { name: "Overview", path: "procurement", description: "Summary of procurement activity." },
       { name: "Suppliers", path: "procurement/suppliers", description: "Manage supplier records." },
       { name: "Purchase Requests", path: "procurement/purchase-requests", description: "Manage internal purchase requests." },
-      { name: "Supplier Purchase Orders", path: "procurement/purchase-orders", description: "Manage purchase orders issued to suppliers." },
+      { name: "Supplier POs", path: "procurement/supplier-pos", description: "Manage purchase orders issued to suppliers." },
       { name: "Receiving", path: "procurement/receiving", description: "Record receipt of ordered goods/services." },
       { name: "Supplier Bills", path: "procurement/supplier-bills", description: "Manage bills received from suppliers." },
       { name: "Supplier Payments", path: "procurement/supplier-payments", description: "Track payments made to suppliers." },
     ]
   },
   {
+    name: "Installation & Projects", icon: "hard-hat", path: "installation",
+    description: "Projects, work orders, budgets, costs and profitability.",
+    children: [
+      { name: "Projects", path: "installation/projects", description: "Manage installation and service projects." },
+      { name: "Work Orders", path: "installation/work-orders", description: "Manage work orders under each project." },
+      { name: "Project Budget", path: "installation/project-budget", description: "Set and track project budgets." },
+      { name: "Project Costs", path: "installation/project-costs", description: "Track costs incurred against a project." },
+      { name: "Service Completion", path: "installation/service-completion", description: "Record service or installation completion." },
+      { name: "Project Profitability", path: "installation/project-profitability", description: "Analyze profitability per project." },
+    ]
+  },
+  {
+    name: "Cash Management", icon: "banknote", path: "cash-management",
+    description: "Bank accounts, cash position, reconciliation and forecasting.",
+    children: [
+      { name: "Bank Accounts", path: "cash-management/bank-accounts", description: "Manage company bank accounts." },
+      { name: "Cash Position", path: "cash-management/cash-position", description: "View current cash position." },
+      { name: "Bank Reconciliation", path: "cash-management/bank-reconciliation", description: "Reconcile bank statements against records." },
+      { name: "Cash Forecast", path: "cash-management/cash-forecast", description: "Forecast future cash flow." },
+    ]
+  },
+  {
     name: "Reports", icon: "bar-chart-3", path: "reports",
-    description: "Financial, sales, purchasing and management reporting.",
+    description: "Financial, sales, procurement, project and management reporting.",
     children: [
       { name: "Financial Reports", path: "reports/financial", description: "Income statement, balance sheet and related reports." },
+      { name: "Client PO Reports", path: "reports/client-po", description: "Reporting on client purchase order activity." },
       { name: "Sales Reports", path: "reports/sales", description: "Sales performance reporting." },
-      { name: "Purchase Order Reports", path: "reports/purchase-orders", description: "Reporting on purchase order activity." },
-      { name: "Accounts Receivable", path: "reports/accounts-receivable", description: "Receivables reporting." },
-      { name: "Accounts Payable", path: "reports/accounts-payable", description: "Payables reporting." },
-      { name: "Expense Reports", path: "reports/expenses", description: "Expense reporting." },
+      { name: "Procurement Reports", path: "reports/procurement", description: "Reporting on procurement activity." },
       { name: "Project Reports", path: "reports/projects", description: "Project-level financial reporting." },
       { name: "Profitability", path: "reports/profitability", description: "Profitability analysis." },
       { name: "Management Reports", path: "reports/management", description: "Reporting for management review." },
     ]
   },
-  {
-    name: "Documents", icon: "folder", path: "documents",
-    description: "Central document storage. Google Drive integration will be connected in a future release.",
-    children: [
-      { name: "Document Center", path: "documents", description: "Central hub for all company documents." },
-      { name: "Client Documents", path: "documents/client", description: "Documents related to clients." },
-      { name: "Supplier Documents", path: "documents/supplier", description: "Documents related to suppliers." },
-      { name: "Financial Documents", path: "documents/financial", description: "Financial statements and supporting files." },
-      { name: "Purchase Orders", path: "documents/purchase-orders", description: "Purchase order documents." },
-      { name: "Invoices", path: "documents/invoices", description: "Invoice documents." },
-      { name: "Receipts", path: "documents/receipts", description: "Receipt documents." },
-      { name: "Contracts", path: "documents/contracts", description: "Contract documents." },
-      { name: "Project Documents", path: "documents/projects", description: "Documents related to projects." },
-    ]
-  },
-  {
-    name: "Administration", icon: "users", path: "administration",
-    description: "Customers, suppliers, employees, departments and company records.",
-    children: [
-      { name: "Overview", path: "administration", description: "Summary of administrative records." },
-      { name: "Customers", path: "administration/customers", description: "Manage customer records." },
-      { name: "Suppliers", path: "administration/suppliers", description: "Manage supplier records." },
-      { name: "Employees", path: "administration/employees", description: "Manage employee records." },
-      { name: "Departments", path: "administration/departments", description: "Manage company departments." },
-      { name: "Company Information", path: "administration/company-info", description: "Company profile and information." },
-      { name: "Assets", path: "administration/assets", description: "Manage company assets." },
-      { name: "Activity Logs", path: "administration/activity-logs", description: "Review system activity history." },
-    ]
-  },
+  { name: "Budget & Forecast", icon: "calendar-range", path: "budget-forecast", description: "Company-wide budgeting and forecasting." },
+  { name: "Approvals", icon: "bell", path: "approvals", description: "Pending approvals across all modules." },
+  { name: "Documents", icon: "folder", path: "documents", description: "Central document storage. Google Drive integration will be connected in a future release." },
+  { name: "Administration", icon: "users", path: "administration", description: "Customers, suppliers, employees, departments and company records." },
   {
     name: "Settings", icon: "settings", path: "settings",
     description: "System configuration, users, roles, permissions and numbering.",
     children: [
-      { name: "General Settings", path: "settings/general", description: "General system settings." },
       { name: "Users & Roles", path: "settings/users-roles", description: "Manage users and their roles." },
-      { name: "Permissions", path: "settings/permissions", description: "Manage role-based permissions." },
       { name: "Approval Rules", path: "settings/approval-rules", description: "Configure approval workflows." },
-      { name: "Accounting Settings", path: "settings/accounting", description: "Configure accounting preferences." },
+      { name: "Chart of Accounts", path: "settings/chart-of-accounts", description: "Manage the company's account structure." },
       { name: "Tax Settings", path: "settings/tax", description: "Configure tax settings." },
       { name: "Numbering", path: "settings/numbering", description: "Configure document numbering schemes." },
-      { name: "Notifications", path: "settings/notifications", description: "Configure notification preferences." },
-      { name: "System Logs", path: "settings/system-logs", description: "Review system logs." },
+      { name: "Audit Logs", path: "settings/audit-logs", description: "Review system activity history." },
     ]
   },
 ];
 
 // Future modules - registry only, NOT shown in sidebar until enabled: true
 const STANDBY_MODULES = {
-  projects:   { name: "Projects & Installation", icon: "hard-hat",       enabled: false },
   inventory:  { name: "Inventory",                icon: "package",       enabled: false },
-  workOrders: { name: "Work Orders",              icon: "clipboard-list",enabled: false },
-  budgeting:  { name: "Budget & Forecast",        icon: "piggy-bank",    enabled: false },
   payroll:    { name: "Payroll",                  icon: "users",         enabled: false },
   contracts:  { name: "Contract Management",      icon: "file-signature",enabled: false },
   logistics:  { name: "Logistics",                icon: "truck",         enabled: false },
   analytics:  { name: "Business Analytics",       icon: "trending-up",   enabled: false },
 };
 
-// role -> which top-level module paths are visible
+// role -> which top-level module paths are visible. Missing keys default to
+// visible (true); only list the ones a role should NOT see.
 const ROLE_PERMISSIONS = {
-  super_admin:     { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:true, settings:true },
-  finance_manager: { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:false, settings:false },
-  finance_staff:   { finance:true, billing:true, procurement:false, reports:true, documents:true, administration:false, settings:false },
-  admin:           { finance:false, billing:false, procurement:false, reports:false, documents:true, administration:true, settings:true },
-  management:      { finance:true, billing:true, procurement:true, reports:true, documents:true, administration:true, settings:false },
+  super_admin:     {},
+  finance_manager: { administration: false, settings: false },
+  finance_staff:   { procurement: false, installation: false, "budget-forecast": false, approvals: false, administration: false, settings: false },
+  admin:           { "client-orders": false, finance: false, billing: false, procurement: false, installation: false, "cash-management": false, reports: false, "budget-forecast": false, approvals: false },
+  management:      { settings: false },
 };
 
 let currentUser = null;
@@ -557,8 +553,8 @@ function headerHtml() {
             ${icon('chevron-down', 'w-4 h-4 text-muted')}
           </button>
           <div id="header-profile-menu" class="hidden absolute right-0 mt-2 w-48 bg-white border border-borderc rounded-md shadow-card py-1 z-50">
-            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="administration/company-info">${icon('user','w-4 h-4')} My Profile</button>
-            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="settings/general">${icon('settings','w-4 h-4')} Account Settings</button>
+            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="administration">${icon('user','w-4 h-4')} My Profile</button>
+            <button class="w-full text-left px-3 py-2 text-sm text-charcoal hover:bg-cream flex items-center gap-2" data-route="settings/users-roles">${icon('settings','w-4 h-4')} Account Settings</button>
             <div class="h-px bg-borderc my-1"></div>
             <button id="header-signout" class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">${icon('log-out','w-4 h-4')} Sign Out</button>
           </div>
