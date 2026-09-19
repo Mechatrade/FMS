@@ -686,6 +686,30 @@ function renderRoute() {
     return;
   }
 
+  // Dynamic Finance routes (not in NAV — reached via buttons/links on the Finance pages)
+  const financeDynamicRoutes = {
+    'finance/ar/new': { fn: renderNewAREntryPage, label: 'New Manual AR Entry', highlight: 'finance/accounts-receivable' },
+    'finance/ap/new': { fn: renderNewAPEntryPage, label: 'New Payable', highlight: 'finance/accounts-payable' },
+    'finance/expenses/new': { fn: renderNewExpensePage, label: 'New Expense', highlight: 'finance/expenses' },
+    'finance/tax/new': { fn: renderNewTaxPage, label: 'New Tax Record', highlight: 'finance/tax' },
+  };
+  if (financeDynamicRoutes[path]) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const route = financeDynamicRoutes[path];
+    setActiveNav(route.highlight, NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: route.label });
+    route.fn();
+    return;
+  }
+  if (path.startsWith('finance/ar/payment/')) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const arId = path.substring('finance/ar/payment/'.length);
+    setActiveNav('finance/accounts-receivable', NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Record Payment' });
+    renderARPaymentPage(arId);
+    return;
+  }
+
   const match = findNavByPath(path);
   if (!match) {
     renderEmptyContent('Page Not Found', 'The page you requested does not exist.');
@@ -720,6 +744,21 @@ function renderRoute() {
   };
   if (clientOrderPages[path]) {
     clientOrderPages[path]();
+    return;
+  }
+
+  // Finance module — real pages instead of placeholders
+  const financePages = {
+    'finance/sales-recognition': renderSalesRecognitionPage,
+    'finance/accounts-receivable': renderAccountsReceivablePage,
+    'finance/accounts-payable': renderAccountsPayablePage,
+    'finance/expenses': renderExpensesPage,
+    'finance/general-ledger': renderGeneralLedgerPage,
+    'finance/journal-entries': renderJournalEntriesPage,
+    'finance/tax': renderTaxPage,
+  };
+  if (financePages[path]) {
+    financePages[path]();
     return;
   }
 
@@ -1043,7 +1082,7 @@ function poTableHtml(pos, opts = {}) {
         <tbody>
           ${pos.map(po => `
             <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
-              <td class="px-4 py-3 font-medium text-charcoal">${po.clientPONumber || '—'}</td>
+              <td class="px-4 py-3 font-medium text-charcoal">${po.clientPONumber || '—'}${po.salesRecognized ? `<div class="mt-0.5"><span class="inline-flex items-center gap-1 text-[10px] font-medium text-forest">${icon('check-circle', 'w-3 h-3')} Sales Recognized</span></div>` : ''}</td>
               <td class="px-4 py-3">${po.clientName || '—'}</td>
               <td class="px-4 py-3">${po.poType || '—'}</td>
               <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
@@ -1530,6 +1569,925 @@ async function handleUpdatePOSubmit(e, id) {
     btn.disabled = false;
     btnText.textContent = 'Save Changes';
   }
+}
+
+/* ==========================================================================
+   FINANCE MODULE  (Firestore-backed: salesRecognitions, accountsReceivable,
+   accountsPayable, expenses, journalEntries, taxRecords, generalLedger)
+   ========================================================================== */
+const ACCOUNTS_CHART = [
+  'Cash', 'Accounts Receivable', 'Accounts Payable', 'Sales Revenue',
+  'Utilities Expense', 'Rent Expense', 'Salaries Expense', 'Supplies Expense',
+  'Transportation Expense', 'Professional Fees Expense', 'Repairs & Maintenance Expense',
+  'Taxes & Licenses Expense', 'Miscellaneous Expense',
+];
+const EXPENSE_ACCOUNTS = ACCOUNTS_CHART.filter(a => a.endsWith('Expense'));
+const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
+const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
+
+function spinnerHtml() {
+  return `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
+}
+
+/* ---- Generic Firestore helpers for Finance collections ---- */
+async function createFinanceDoc(collectionName, data) {
+  return addDoc(collection(db, collectionName), {
+    ...data,
+    createdAt: serverTimestamp(),
+    createdBy: currentUser ? currentUser.email : null,
+  });
+}
+async function updateFinanceDoc(collectionName, id, data) {
+  return updateDoc(doc(db, collectionName, id), {
+    ...data,
+    updatedAt: serverTimestamp(),
+    updatedBy: currentUser ? currentUser.email : null,
+  });
+}
+async function fetchFinanceCollection(collectionName) {
+  const snap = await getDocs(query(collection(db, collectionName), orderBy('createdAt', 'desc')));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function fetchFinanceDoc(collectionName, id) {
+  const snap = await getDoc(doc(db, collectionName, id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+async function postGLEntries(entries) {
+  for (const entry of entries) {
+    await addDoc(collection(db, 'generalLedger'), { ...entry, createdAt: serverTimestamp() });
+  }
+}
+
+/* ---- Sales Recognition ---- */
+async function renderSalesRecognitionPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Sales Recognition</h1>
+      <p class="text-sm text-muted mt-1">Client POs marked Ready for Billing appear below. Recognizing a sale creates the Accounts Receivable entry and posts to the General Ledger — it does not change the PO's status in Client Orders.</p>
+    </div>
+    <div id="sr-eligible-container" class="text-sm text-muted mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Recently Recognized</h2>
+    <div id="sr-recent-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const [allPOs, recognized] = await Promise.all([fetchClientPOs(), fetchFinanceCollection('salesRecognitions')]);
+    const eligible = allPOs.filter(p => p.status === 'Ready for Billing' && !p.salesRecognized);
+
+    document.getElementById('sr-eligible-container').innerHTML = eligible.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client PO #</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Delivered</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${eligible.map(po => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${po.clientPONumber || '—'}</td>
+                <td class="px-4 py-3">${po.clientName || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+                <td class="px-4 py-3">${po.datesDelivered || '—'}</td>
+                <td class="px-4 py-3 text-right"><button data-recognize="${po.id}" data-amount="${po.poAmount}" data-client="${escapeAttr(po.clientName)}" data-pono="${escapeAttr(po.clientPONumber)}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Recognize Sale</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No POs currently eligible for recognition.</div>`;
+
+    document.getElementById('sr-recent-container').innerHTML = recognized.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client PO #</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Recognized</th><th class="px-4 py-3">Recognized By</th>
+          </tr></thead>
+          <tbody>
+            ${recognized.slice(0, 15).map(sr => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${sr.clientPONumber || '—'}</td>
+                <td class="px-4 py-3">${sr.clientName || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(sr.amount)}</td>
+                <td class="px-4 py-3">${formatDate(sr.dateRecognized)}</td>
+                <td class="px-4 py-3">${sr.recognizedBy || '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No sales recognized yet.</div>`;
+
+    refreshIcons();
+
+    document.querySelectorAll('[data-recognize]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Recognizing...';
+        const poId = btn.getAttribute('data-recognize');
+        const amount = Number(btn.getAttribute('data-amount')) || 0;
+        const clientName = btn.getAttribute('data-client');
+        const clientPONumber = btn.getAttribute('data-pono');
+        try {
+          const dateRecognized = todayISO();
+          const srRef = await createFinanceDoc('salesRecognitions', { poId, clientPONumber, clientName, amount, dateRecognized, recognizedBy: currentUser ? currentUser.email : null });
+          await createFinanceDoc('accountsReceivable', {
+            source: 'sales-recognition', poId, salesRecognitionId: srRef.id,
+            clientPONumber, clientName, description: `Sales Recognition — ${clientPONumber}`,
+            amount, amountPaid: 0, balance: amount, status: 'Unpaid',
+            dateCreated: dateRecognized, dueDate: '', payments: [],
+          });
+          await postGLEntries([
+            { date: dateRecognized, account: 'Accounts Receivable', debit: amount, credit: 0, description: `Sales Recognition — ${clientPONumber} (${clientName})`, sourceType: 'sales-recognition', sourceId: srRef.id },
+            { date: dateRecognized, account: 'Sales Revenue', debit: 0, credit: amount, description: `Sales Recognition — ${clientPONumber} (${clientName})`, sourceType: 'sales-recognition', sourceId: srRef.id },
+          ]);
+          await updateClientPO(poId, { salesRecognized: true, salesRecognizedAt: dateRecognized, salesRecognitionId: srRef.id });
+          renderSalesRecognitionPage();
+        } catch (e) {
+          console.error(e);
+          alert('Could not recognize this sale. Please try again.');
+          btn.disabled = false;
+          btn.textContent = 'Recognize Sale';
+        }
+      });
+    });
+  } catch (e) {
+    console.error(e);
+    document.getElementById('sr-eligible-container').innerHTML = poLoadErrorHtml();
+    document.getElementById('sr-recent-container').innerHTML = '';
+  }
+}
+
+/* ---- Accounts Receivable ---- */
+function arStatusBadgeClass(status) {
+  const map = { 'Unpaid': 'bg-red-50 text-red-600 border-red-200', 'Partially Paid': 'bg-amber-50 text-amber-700 border-amber-200', 'Paid': 'bg-teal-50 text-teal-700 border-teal-200' };
+  return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
+}
+function arTableHtml(entries) {
+  if (!entries.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No receivables yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Client</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Paid</th><th class="px-4 py-3">Balance</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${entries.map(e => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3">${e.clientName || '—'}</td>
+              <td class="px-4 py-3">${e.clientPONumber || e.description || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
+              <td class="px-4 py-3">${formatCurrency(e.amountPaid)}</td>
+              <td class="px-4 py-3 font-medium">${formatCurrency(e.balance)}</td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${arStatusBadgeClass(e.status)}">${e.status}</span></td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/ar/payment/${e.id}" class="text-forest hover:underline text-xs font-medium">Record Payment</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function renderAccountsReceivablePage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Accounts Receivable</h1>
+        <p class="text-sm text-muted mt-1">Amounts owed by clients. Auto-created from Sales Recognition; manual entries also supported.</p>
+      </div>
+      <a href="#/finance/ar/new" class="btn-primary text-sm">+ New Manual Entry</a>
+    </div>
+    <div id="ar-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const entries = await fetchFinanceCollection('accountsReceivable');
+    document.getElementById('ar-list-container').innerHTML = arTableHtml(entries);
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('ar-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewAREntryPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Manual AR Entry</h1>
+      <p class="text-sm text-muted mt-1">For receivables outside the Client PO flow (e.g. a cash sale not tied to a PO).</p>
+    </div>
+    <form id="ar-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="ar-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('clientName', 'Client Name', { required: true })}
+        ${textField('description', 'Description', { required: true, placeholder: 'e.g. Cash sale, walk-in client' })}
+        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('dateCreated', 'Date', { required: true, value: todayISO() })}
+        ${dateField('dueDate', 'Due Date (optional)', {})}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="ar-form-submit" type="submit" class="btn-primary"><span id="ar-form-submit-text">Save Entry</span></button>
+        <a href="#/finance/accounts-receivable" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('ar-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('ar-form-submit');
+    const btnText = document.getElementById('ar-form-submit-text');
+    const errBox = document.getElementById('ar-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const clientName = val('clientName'), description = val('description'), amount = Number(val('amount')) || 0, dateCreated = val('dateCreated'), dueDate = val('dueDate');
+    if (!clientName || !description || !amount || !dateCreated) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('accountsReceivable', { source: 'manual', clientName, description, amount, amountPaid: 0, balance: amount, status: 'Unpaid', dateCreated, dueDate, payments: [] });
+      navigateTo('finance/accounts-receivable');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this entry. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Entry';
+    }
+  });
+}
+async function renderARPaymentPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let ar;
+  try {
+    ar = await fetchFinanceDoc('accountsReceivable', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!ar) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Entry not found.</p><a href="#/finance/accounts-receivable" class="mt-4 text-sm text-forest hover:underline">Back to Accounts Receivable</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Record Payment</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(ar.clientName)} — ${escapeAttr(ar.clientPONumber || ar.description)}</p>
+    </div>
+    <div class="card p-6 max-w-2xl mb-6">
+      <div class="grid grid-cols-3 gap-4 text-sm">
+        <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ar.amount)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Paid So Far</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ar.amountPaid)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Balance</p><p class="font-semibold text-forest mt-1">${formatCurrency(ar.balance)}</p></div>
+      </div>
+    </div>
+    <form id="pay-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${numberField('payAmount', 'Payment Amount (₱)', { required: true, step: '0.01', value: ar.balance })}
+        ${dateField('payDate', 'Payment Date', { required: true, value: todayISO() })}
+        ${selectField('payMethod', 'Payment Method', PAYMENT_METHODS, { required: true, value: 'Cash' })}
+        ${textField('payNotes', 'Notes / Reference')}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="pay-form-submit" type="submit" class="btn-primary"><span id="pay-form-submit-text">Record Payment</span></button>
+        <a href="#/finance/accounts-receivable" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('pay-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('pay-form-submit');
+    const btnText = document.getElementById('pay-form-submit-text');
+    const errBox = document.getElementById('pay-form-error');
+    errBox.classList.add('hidden');
+    const payAmount = Number(document.getElementById('field-payAmount').value) || 0;
+    const payDate = document.getElementById('field-payDate').value;
+    const payMethod = document.getElementById('field-payMethod').value;
+    const payNotes = document.getElementById('field-payNotes').value.trim();
+
+    if (!payAmount || payAmount <= 0 || !payDate) {
+      errBox.textContent = 'Enter a valid payment amount and date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (payAmount > ar.balance + 0.01) {
+      errBox.textContent = `Payment cannot exceed the outstanding balance of ${formatCurrency(ar.balance)}.`;
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const newAmountPaid = Number((ar.amountPaid + payAmount).toFixed(2));
+      const newBalance = Number((ar.amount - newAmountPaid).toFixed(2));
+      const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
+      const payments = Array.isArray(ar.payments) ? [...ar.payments] : [];
+      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, recordedBy: currentUser ? currentUser.email : null });
+
+      await updateFinanceDoc('accountsReceivable', id, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
+      await postGLEntries([
+        { date: payDate, account: 'Cash', debit: payAmount, credit: 0, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id },
+        { date: payDate, account: 'Accounts Receivable', debit: 0, credit: payAmount, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id },
+      ]);
+      navigateTo('finance/accounts-receivable');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not record this payment. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Record Payment';
+    }
+  });
+}
+
+/* ---- Accounts Payable ---- */
+function apTableHtml(entries) {
+  if (!entries.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No payables recorded yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Payee</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Due Date</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${entries.map(e => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${e.payee || '—'}</td>
+              <td class="px-4 py-3">${e.referenceNumber || '—'}</td>
+              <td class="px-4 py-3">${e.category || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
+              <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<button data-mark-paid-ap="${e.id}" data-amount="${e.amount}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireApMarkPaid() {
+  document.querySelectorAll('[data-mark-paid-ap]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Updating...';
+      const id = btn.getAttribute('data-mark-paid-ap');
+      const amount = Number(btn.getAttribute('data-amount')) || 0;
+      try {
+        const datePaid = todayISO();
+        await updateFinanceDoc('accountsPayable', id, { status: 'Paid', datePaid });
+        await postGLEntries([
+          { date: datePaid, account: 'Accounts Payable', debit: amount, credit: 0, description: 'Accounts Payable settled', sourceType: 'ap-payment', sourceId: id },
+          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: 'Accounts Payable settled', sourceType: 'ap-payment', sourceId: id },
+        ]);
+        renderAccountsPayablePage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update this payable. Please try again.');
+        btn.disabled = false; btn.textContent = 'Mark Paid';
+      }
+    });
+  });
+}
+async function renderAccountsPayablePage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Accounts Payable</h1>
+        <p class="text-sm text-muted mt-1">Amounts owed to suppliers/vendors. Manual entry for now.</p>
+      </div>
+      <a href="#/finance/ap/new" class="btn-primary text-sm">+ New Payable</a>
+    </div>
+    <div id="ap-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const entries = await fetchFinanceCollection('accountsPayable');
+    document.getElementById('ap-list-container').innerHTML = apTableHtml(entries);
+    refreshIcons();
+    wireApMarkPaid();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('ap-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewAPEntryPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Payable</h1>
+      <p class="text-sm text-muted mt-1">Recording this posts Dr [Category] / Cr Accounts Payable to the General Ledger immediately.</p>
+    </div>
+    <form id="ap-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="ap-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('payee', 'Payee / Supplier Name', { required: true })}
+        ${textField('referenceNumber', 'Reference / Bill Number')}
+        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true })}
+        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('dateReceived', 'Date', { required: true, value: todayISO() })}
+        ${dateField('dueDate', 'Due Date')}
+        ${textareaField('description', 'Description', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="ap-form-submit" type="submit" class="btn-primary"><span id="ap-form-submit-text">Save Payable</span></button>
+        <a href="#/finance/accounts-payable" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('ap-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('ap-form-submit');
+    const btnText = document.getElementById('ap-form-submit-text');
+    const errBox = document.getElementById('ap-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const payee = val('payee'), referenceNumber = val('referenceNumber'), category = val('category'), amount = Number(val('amount')) || 0, dateReceived = val('dateReceived'), dueDate = val('dueDate'), description = val('description');
+    if (!payee || !category || !amount || !dateReceived) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const ref = await createFinanceDoc('accountsPayable', { payee, referenceNumber, category, amount, dateReceived, dueDate, description, status: 'Unpaid' });
+      await postGLEntries([
+        { date: dateReceived, account: category, debit: amount, credit: 0, description: `Payable — ${payee}${referenceNumber ? ' (' + referenceNumber + ')' : ''}`, sourceType: 'accounts-payable', sourceId: ref.id },
+        { date: dateReceived, account: 'Accounts Payable', debit: 0, credit: amount, description: `Payable — ${payee}${referenceNumber ? ' (' + referenceNumber + ')' : ''}`, sourceType: 'accounts-payable', sourceId: ref.id },
+      ]);
+      navigateTo('finance/accounts-payable');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this payable. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Payable';
+    }
+  });
+}
+
+/* ---- Expenses ---- */
+function expenseTableHtml(entries) {
+  if (!entries.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No expenses recorded yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${entries.map(e => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3">${formatDate(e.date)}</td>
+              <td class="px-4 py-3">${e.category || '—'}</td>
+              <td class="px-4 py-3">${e.payee || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
+              <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<button data-mark-paid-exp="${e.id}" data-amount="${e.amount}" data-category="${escapeAttr(e.category)}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireExpenseMarkPaid() {
+  document.querySelectorAll('[data-mark-paid-exp]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Updating...';
+      const id = btn.getAttribute('data-mark-paid-exp');
+      const amount = Number(btn.getAttribute('data-amount')) || 0;
+      const category = btn.getAttribute('data-category');
+      try {
+        const datePaid = todayISO();
+        await updateFinanceDoc('expenses', id, { status: 'Paid', datePaid });
+        await postGLEntries([
+          { date: datePaid, account: category, debit: amount, credit: 0, description: `Expense paid — ${category}`, sourceType: 'expense', sourceId: id },
+          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: `Expense paid — ${category}`, sourceType: 'expense', sourceId: id },
+        ]);
+        renderExpensesPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update this expense. Please try again.');
+        btn.disabled = false; btn.textContent = 'Mark Paid';
+      }
+    });
+  });
+}
+async function renderExpensesPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Expenses</h1>
+        <p class="text-sm text-muted mt-1">Company expenses. Posts to the General Ledger once marked Paid.</p>
+      </div>
+      <a href="#/finance/expenses/new" class="btn-primary text-sm">+ New Expense</a>
+    </div>
+    <div id="exp-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const entries = await fetchFinanceCollection('expenses');
+    document.getElementById('exp-list-container').innerHTML = expenseTableHtml(entries);
+    refreshIcons();
+    wireExpenseMarkPaid();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('exp-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewExpensePage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Expense</h1>
+      <p class="text-sm text-muted mt-1">This posts to the General Ledger once marked Paid.</p>
+    </div>
+    <form id="exp-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="exp-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('date', 'Date', { required: true, value: todayISO() })}
+        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true })}
+        ${textField('payee', 'Payee / Vendor')}
+        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${selectField('paymentMethod', 'Payment Method', PAYMENT_METHODS, { value: 'Cash' })}
+        ${textareaField('description', 'Description', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="exp-form-submit" type="submit" class="btn-primary"><span id="exp-form-submit-text">Save Expense</span></button>
+        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('exp-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('exp-form-submit');
+    const btnText = document.getElementById('exp-form-submit-text');
+    const errBox = document.getElementById('exp-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const date = val('date'), category = val('category'), payee = val('payee'), amount = Number(val('amount')) || 0, paymentMethod = val('paymentMethod'), description = val('description');
+    if (!date || !category || !amount) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('expenses', { date, category, payee, amount, paymentMethod, description, status: 'Unpaid' });
+      navigateTo('finance/expenses');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this expense. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Expense';
+    }
+  });
+}
+
+/* ---- Journal Entries ---- */
+function journalListHtml(entries) {
+  if (!entries.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No journal entries posted yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="space-y-3">
+      ${entries.slice(0, 15).map(je => `
+        <div class="card p-4">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-sm font-medium text-charcoal">${je.reference || '—'}</p>
+            <p class="text-xs text-muted">${formatDate(je.date)}</p>
+          </div>
+          <table class="w-full text-xs">
+            <tbody>
+              ${(je.lines || []).map(l => `
+                <tr class="border-t border-borderc">
+                  <td class="py-1.5 text-charcoal">${l.account}</td>
+                  <td class="py-1.5 text-right w-24">${l.debit ? formatCurrency(l.debit) : ''}</td>
+                  <td class="py-1.5 text-right w-24">${l.credit ? formatCurrency(l.credit) : ''}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`).join('')}
+    </div>`;
+}
+function addJournalLineRow() {
+  const container = document.getElementById('je-lines');
+  const rowId = 'je-row-' + Math.random().toString(36).slice(2, 9);
+  const row = document.createElement('div');
+  row.className = 'grid grid-cols-12 gap-2 items-center';
+  row.setAttribute('data-je-row', rowId);
+  row.innerHTML = `
+    <div class="col-span-6">
+      <select class="je-account w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">Select account...</option>
+        ${ACCOUNTS_CHART.map(a => `<option value="${a}">${a}</option>`).join('')}
+      </select>
+    </div>
+    <div class="col-span-3">
+      <input type="number" step="0.01" min="0" placeholder="Debit" class="je-debit w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>
+    <div class="col-span-2">
+      <input type="number" step="0.01" min="0" placeholder="Credit" class="je-credit w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>
+    <div class="col-span-1 text-right">
+      <button type="button" class="je-remove text-muted hover:text-red-600" title="Remove line">${icon('x', 'w-4 h-4')}</button>
+    </div>`;
+  container.appendChild(row);
+  refreshIcons();
+  row.querySelector('.je-debit').addEventListener('input', updateJournalTotals);
+  row.querySelector('.je-credit').addEventListener('input', updateJournalTotals);
+  row.querySelector('.je-remove').addEventListener('click', () => { row.remove(); updateJournalTotals(); });
+}
+function updateJournalTotals() {
+  let totalDebit = 0, totalCredit = 0;
+  document.querySelectorAll('#je-lines [data-je-row]').forEach(row => {
+    totalDebit += Number(row.querySelector('.je-debit').value) || 0;
+    totalCredit += Number(row.querySelector('.je-credit').value) || 0;
+  });
+  document.getElementById('je-total-debit').textContent = formatCurrency(totalDebit);
+  document.getElementById('je-total-credit').textContent = formatCurrency(totalCredit);
+}
+async function handleJournalEntrySubmit(e) {
+  e.preventDefault();
+  const btn = document.getElementById('je-form-submit');
+  const btnText = document.getElementById('je-form-submit-text');
+  const errBox = document.getElementById('je-form-error');
+  errBox.classList.add('hidden');
+
+  const date = document.getElementById('field-je-date').value;
+  const reference = document.getElementById('field-je-reference').value.trim();
+  const lines = [];
+  document.querySelectorAll('#je-lines [data-je-row]').forEach(row => {
+    const account = row.querySelector('.je-account').value;
+    const debit = Number(row.querySelector('.je-debit').value) || 0;
+    const credit = Number(row.querySelector('.je-credit').value) || 0;
+    if (account && (debit || credit)) lines.push({ account, debit, credit });
+  });
+
+  const totalDebit = lines.reduce((s, l) => s + l.debit, 0);
+  const totalCredit = lines.reduce((s, l) => s + l.credit, 0);
+
+  if (!date || !reference) {
+    errBox.textContent = 'Date and Reference/Description are required.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  if (lines.length < 2) {
+    errBox.textContent = 'Add at least two lines.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  if (Math.abs(totalDebit - totalCredit) > 0.01 || totalDebit === 0) {
+    errBox.textContent = `Debits (${formatCurrency(totalDebit)}) and Credits (${formatCurrency(totalCredit)}) must balance and be greater than zero.`;
+    errBox.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true; btnText.innerHTML = spinnerHtml();
+  try {
+    const jeRef = await createFinanceDoc('journalEntries', { date, reference, lines });
+    await postGLEntries(lines.map(l => ({ date, account: l.account, debit: l.debit, credit: l.credit, description: reference, sourceType: 'journal-entry', sourceId: jeRef.id })));
+    navigateTo('finance/journal-entries');
+  } catch (err) {
+    console.error(err);
+    errBox.textContent = 'Could not post this journal entry. Please try again.';
+    errBox.classList.remove('hidden');
+    btn.disabled = false; btnText.textContent = 'Post Journal Entry';
+  }
+}
+async function renderJournalEntriesPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Journal Entries</h1>
+      <p class="text-sm text-muted mt-1">Manual double-entry adjustments. Debits and credits must balance before posting.</p>
+    </div>
+    <form id="je-form" class="card p-6 space-y-4 max-w-4xl mb-8">
+      <div id="je-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('je-date', 'Date', { required: true, value: todayISO() })}
+        ${textField('je-reference', 'Reference / Description', { required: true })}
+      </div>
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="block text-sm font-medium text-charcoal">Lines</label>
+          <button type="button" id="je-add-line" class="text-xs font-medium text-forest hover:underline">+ Add Line</button>
+        </div>
+        <div id="je-lines" class="space-y-2"></div>
+        <div class="flex items-center justify-end gap-6 mt-3 text-sm border-t border-borderc pt-3">
+          <span class="text-muted">Total Debit: <span id="je-total-debit" class="font-medium text-charcoal">₱ 0.00</span></span>
+          <span class="text-muted">Total Credit: <span id="je-total-credit" class="font-medium text-charcoal">₱ 0.00</span></span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="je-form-submit" type="submit" class="btn-primary"><span id="je-form-submit-text">Post Journal Entry</span></button>
+      </div>
+    </form>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Journal Entries</h2>
+    <div id="je-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  addJournalLineRow();
+  addJournalLineRow();
+  document.getElementById('je-add-line').addEventListener('click', () => addJournalLineRow());
+  document.getElementById('je-form').addEventListener('submit', handleJournalEntrySubmit);
+
+  try {
+    const entries = await fetchFinanceCollection('journalEntries');
+    document.getElementById('je-list-container').innerHTML = journalListHtml(entries);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('je-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ---- Tax ---- */
+function taxFilingBadgeClass(status) {
+  const map = { 'Pending': 'bg-amber-50 text-amber-700 border-amber-200', 'Filed': 'bg-blue-50 text-blue-700 border-blue-200', 'Paid': 'bg-teal-50 text-teal-700 border-teal-200' };
+  return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
+}
+function taxTableHtml(entries) {
+  if (!entries.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No tax records yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Tax Type</th><th class="px-4 py-3">Period</th><th class="px-4 py-3">Taxable Amount</th><th class="px-4 py-3">Tax Amount</th><th class="px-4 py-3">Due Date</th><th class="px-4 py-3">Filing Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${entries.map(e => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${e.taxType || '—'}</td>
+              <td class="px-4 py-3">${e.period || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(e.taxableAmount)}</td>
+              <td class="px-4 py-3">${formatCurrency(e.taxAmount)}</td>
+              <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${taxFilingBadgeClass(e.filingStatus)}">${e.filingStatus}</span></td>
+              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<button data-mark-paid-tax="${e.id}" data-amount="${e.taxAmount}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireTaxMarkPaid() {
+  document.querySelectorAll('[data-mark-paid-tax]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Updating...';
+      const id = btn.getAttribute('data-mark-paid-tax');
+      const amount = Number(btn.getAttribute('data-amount')) || 0;
+      try {
+        const datePaid = todayISO();
+        await updateFinanceDoc('taxRecords', id, { filingStatus: 'Paid', datePaid });
+        await postGLEntries([
+          { date: datePaid, account: 'Taxes & Licenses Expense', debit: amount, credit: 0, description: 'Tax paid', sourceType: 'tax', sourceId: id },
+          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: 'Tax paid', sourceType: 'tax', sourceId: id },
+        ]);
+        renderTaxPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update this tax record. Please try again.');
+        btn.disabled = false; btn.textContent = 'Mark Paid';
+      }
+    });
+  });
+}
+async function renderTaxPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Tax</h1>
+        <p class="text-sm text-muted mt-1">Tax obligations and filings. Posts to the General Ledger once marked Paid.</p>
+      </div>
+      <a href="#/finance/tax/new" class="btn-primary text-sm">+ New Tax Record</a>
+    </div>
+    <div id="tax-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const entries = await fetchFinanceCollection('taxRecords');
+    document.getElementById('tax-list-container').innerHTML = taxTableHtml(entries);
+    refreshIcons();
+    wireTaxMarkPaid();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('tax-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewTaxPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Tax Record</h1>
+    </div>
+    <form id="tax-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="tax-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${selectField('taxType', 'Tax Type', TAX_TYPES, { required: true })}
+        ${textField('period', 'Period', { required: true, placeholder: 'e.g. Q3 2026, September 2026' })}
+        ${numberField('taxableAmount', 'Taxable Amount (₱)', { required: true, step: '0.01' })}
+        ${numberField('taxAmount', 'Tax Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('dueDate', 'Due Date', { required: true })}
+        ${textField('referenceNumber', 'Reference / Form Number')}
+        ${textareaField('notes', 'Notes', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="tax-form-submit" type="submit" class="btn-primary"><span id="tax-form-submit-text">Save Tax Record</span></button>
+        <a href="#/finance/tax" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('tax-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('tax-form-submit');
+    const btnText = document.getElementById('tax-form-submit-text');
+    const errBox = document.getElementById('tax-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const taxType = val('taxType'), period = val('period'), taxableAmount = Number(val('taxableAmount')) || 0, taxAmount = Number(val('taxAmount')) || 0, dueDate = val('dueDate'), referenceNumber = val('referenceNumber'), notes = val('notes');
+    if (!taxType || !period || !taxAmount || !dueDate) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('taxRecords', { taxType, period, taxableAmount, taxAmount, dueDate, referenceNumber, notes, filingStatus: 'Pending' });
+      navigateTo('finance/tax');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this tax record. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Tax Record';
+    }
+  });
+}
+
+/* ---- General Ledger ---- */
+async function renderGeneralLedgerPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">General Ledger</h1>
+      <p class="text-sm text-muted mt-1">Consolidated postings from Sales Recognition, Accounts Receivable payments, Accounts Payable, Expenses, and Journal Entries.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <input id="gl-search" type="text" placeholder="Search description..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="gl-account" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Accounts</option>
+        ${ACCOUNTS_CHART.map(a => `<option value="${a}">${a}</option>`).join('')}
+      </select>
+    </div>
+    <div id="gl-totals" class="text-sm text-muted mb-3"></div>
+    <div id="gl-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  let allEntries = [];
+  try {
+    allEntries = await fetchFinanceCollection('generalLedger');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('gl-list-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+
+  const renderFiltered = () => {
+    const search = document.getElementById('gl-search').value.trim().toLowerCase();
+    const account = document.getElementById('gl-account').value;
+    const filtered = allEntries.filter(g => {
+      const matchesSearch = !search || (g.description || '').toLowerCase().includes(search);
+      const matchesAccount = !account || g.account === account;
+      return matchesSearch && matchesAccount;
+    });
+    const totalDebit = filtered.reduce((s, g) => s + (Number(g.debit) || 0), 0);
+    const totalCredit = filtered.reduce((s, g) => s + (Number(g.credit) || 0), 0);
+    document.getElementById('gl-totals').innerHTML = `Showing ${filtered.length} entries · Total Debit: <span class="font-medium text-charcoal">${formatCurrency(totalDebit)}</span> · Total Credit: <span class="font-medium text-charcoal">${formatCurrency(totalCredit)}</span>`;
+
+    document.getElementById('gl-list-container').innerHTML = filtered.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Date</th><th class="px-4 py-3">Account</th><th class="px-4 py-3">Description</th><th class="px-4 py-3 text-right">Debit</th><th class="px-4 py-3 text-right">Credit</th>
+          </tr></thead>
+          <tbody>
+            ${filtered.map(g => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3">${formatDate(g.date)}</td>
+                <td class="px-4 py-3 font-medium text-charcoal">${g.account}</td>
+                <td class="px-4 py-3">${g.description || '—'}</td>
+                <td class="px-4 py-3 text-right">${g.debit ? formatCurrency(g.debit) : ''}</td>
+                <td class="px-4 py-3 text-right">${g.credit ? formatCurrency(g.credit) : ''}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No entries match your filters.</div>`;
+  };
+
+  renderFiltered();
+  document.getElementById('gl-search').addEventListener('input', renderFiltered);
+  document.getElementById('gl-account').addEventListener('change', renderFiltered);
 }
 
 /* ==========================================================================
