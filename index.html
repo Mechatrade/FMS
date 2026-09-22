@@ -1126,6 +1126,9 @@ function readPOFormValues() {
 function paymentTermsFieldHtml(v = {}) {
   const type = v.type || '';
   const days = v.days || '';
+  const legacyNotice = (!type && v.legacyText)
+    ? `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5 mt-2">Previously entered (before this dropdown existed): <span class="font-medium">${escapeAttr(v.legacyText)}</span>. Pick the closest option above to carry it forward in the new format.</p>`
+    : '';
   return `
     <div class="sm:col-span-2">
       <label class="block text-sm font-medium text-charcoal mb-1.5">Payment Terms</label>
@@ -1135,6 +1138,7 @@ function paymentTermsFieldHtml(v = {}) {
         <option value="COD" ${type === 'COD' ? 'selected' : ''}>COD</option>
         <option value="Terms" ${type === 'Terms' ? 'selected' : ''}>Terms</option>
       </select>
+      ${legacyNotice}
 
       <div id="pt-advance-wrap" class="mt-3 ${type === 'Advance Payment' ? '' : 'hidden'}">
         <label class="block text-sm font-medium text-charcoal mb-1.5">Advance Payment Amount (₱)</label>
@@ -1879,7 +1883,7 @@ async function renderClientPOEditPage(id) {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays })}
+          ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays, legacyText: po.paymentTermsType ? '' : po.paymentTerms })}
           ${textField('warranty', 'Warranty', { value: po.warranty, placeholder: 'e.g. 1 year on parts and labor' })}
           ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { value: po.poDocumentReference, placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
