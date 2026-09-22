@@ -105,6 +105,36 @@ try {
 }
 
 /* ==========================================================================
+   CRM-V2 READ-ONLY CONNECTION
+   ==========================================================================
+   Second, separate Firebase app instance pointed at Mechatrade CRM-v2, used
+   ONLY to read the salesorders collection for the "Pull from CRM" feature
+   on New Client PO. This is a different Firebase project (different Auth
+   too), so this connection is unauthenticated — it relies entirely on
+   CRM-v2's Firestore rules allowing public read on salesorders only.
+   Same cross-project read-only pattern as Mechatrade Payroll reading
+   Mechatrade PulseTime's Firestore.
+*/
+const crmFirebaseConfig = {
+  apiKey: "AIzaSyB-BeWLC_tANjXRoEjfT6U0Tm8eraM4LN4",
+  authDomain: "mechatrade-crm-v2.firebaseapp.com",
+  projectId: "mechatrade-crm-v2",
+  storageBucket: "mechatrade-crm-v2.firebasestorage.app",
+  messagingSenderId: "265892593742",
+  appId: "1:265892593742:web:a4dc08920224c6df93431f"
+};
+
+let crmDb;
+let crmReady = false;
+try {
+  const crmApp = initializeApp(crmFirebaseConfig, "crm-v2");
+  crmDb = getFirestore(crmApp);
+  crmReady = true;
+} catch (e) {
+  console.error("CRM-v2 connection failed to initialize.", e);
+}
+
+/* ==========================================================================
    NAVIGATION CONFIG  (single source of truth for sidebar + routes + pages)
    ========================================================================== */
 const NAV = [
@@ -975,6 +1005,15 @@ async function updateClientPO(id, data) {
   });
 }
 
+/* ---- CRM-v2 Sales Order pull (read-only, cross-project) ---- */
+async function fetchCRMSalesOrderByControlNo(controlNo) {
+  if (!crmReady) throw new Error('CRM connection not configured.');
+  const snap = await getDocs(query(collection(crmDb, 'salesorders'), where('controlNo', '==', controlNo)));
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, ...d.data() };
+}
+
 /* ---- Reusable form field builders ---- */
 function textField(name, label, opts = {}) {
   const span = opts.span2 ? 'sm:col-span-2' : '';
@@ -1047,13 +1086,19 @@ function readPOFormValues() {
     projectDescription: val('projectDescription'),
     poAmount: Number(val('poAmount')) || 0,
     dateReceived: val('dateReceived'),
+    poDateForwarded: val('poDateForwarded'),
     leadTimeValue: val('leadTimeValue') ? Number(val('leadTimeValue')) : null,
     leadTimeUnit: val('leadTimeUnit') || 'days',
     commitmentDeliveryDate: val('commitmentDeliveryDate'),
     clientContactPerson: val('clientContactPerson'),
     clientContactNumber: val('clientContactNumber'),
     salesPerson: val('salesPerson'),
+    salesInvoiceNo: val('salesInvoiceNo'),
+    crmControlNumber: val('crmControlNumber'),
+    deliveryReceiptNo: val('deliveryReceiptNo'),
+    collectionReceiptNo: val('collectionReceiptNo'),
     paymentTerms: val('paymentTerms'),
+    warranty: val('warranty'),
     poDocumentReference: val('poDocumentReference'),
     notes: val('notes'),
   };
@@ -1138,6 +1183,20 @@ function renderNewClientPOPage() {
       <h1 class="text-xl font-semibold text-charcoal">New Client PO</h1>
       <p class="text-sm text-muted mt-1">Record a new client purchase order. Status starts as <span class="font-medium text-charcoal">Open</span>.</p>
     </div>
+
+    <div class="card p-5 mb-6 max-w-4xl">
+      <h2 class="text-sm font-semibold text-charcoal mb-1">Pull from CRM</h2>
+      <p class="text-xs text-muted mb-3">Enter the CRM Quotation Control No. from the won Sales Order to auto-fill the fields below. Everything stays editable before you save.</p>
+      <div class="flex flex-wrap gap-2">
+        <input id="crm-pull-input" type="text" placeholder="e.g. CN-S-2026-09-00001"
+          class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+        <button type="button" id="crm-pull-btn" class="btn-primary text-sm">
+          <span id="crm-pull-btn-text">Search CRM</span>
+        </button>
+      </div>
+      <div id="crm-pull-result" class="mt-3"></div>
+    </div>
+
     <form id="po-form" class="card p-6 space-y-6 max-w-4xl">
       <div id="po-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
 
@@ -1155,8 +1214,9 @@ function renderNewClientPOPage() {
 
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${dateField('dateReceived', 'PO Date Received', { required: true, value: todayISO() })}
+          ${dateField('poDateForwarded', 'PO Date Forwarded')}
           <div>
             <label class="block text-sm font-medium text-charcoal mb-1.5">Lead Time</label>
             <div class="flex gap-2">
@@ -1186,10 +1246,23 @@ function renderNewClientPOPage() {
       </div>
 
       <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('crmControlNumber', 'CRM Quotation Control No.', { placeholder: 'e.g. Q-2026-0142', hint: 'Links back to the won quotation in Mechatrade CRM-v2.' })}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+          ${textField('salesInvoiceNo', 'Sales Invoice No.')}
+          ${textField('deliveryReceiptNo', 'Delivery Receipt No.')}
+          ${textField('collectionReceiptNo', 'Collection Receipt No.')}
+        </div>
+      </div>
+
+      <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('paymentTerms', 'Payment Terms', { placeholder: 'e.g. 30 days, COD, 50% down' })}
-          ${textField('poDocumentReference', 'PO Document Reference', { placeholder: 'Filename or note' })}
+          ${textField('warranty', 'Warranty', { placeholder: 'e.g. 1 year on parts and labor' })}
+          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true })}
         </div>
       </div>
@@ -1203,7 +1276,88 @@ function renderNewClientPOPage() {
     </form>`);
   refreshIcons();
   wirePOFormAutoCalc();
+  wireCRMPullButton();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
+}
+
+function crmPullResultHtml(so) {
+  return `
+    <div class="border border-forest/30 bg-forest/5 rounded-md p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-sm font-medium text-charcoal">${escapeAttr(so.orderNo)} — ${escapeAttr(so.billedTo && so.billedTo.name)}</p>
+          <p class="text-xs text-muted mt-0.5">Customer PO ${escapeAttr(so.poNumber)} · ${formatCurrency(so.total)} · Control No. ${escapeAttr(so.controlNo)}</p>
+        </div>
+        <button type="button" id="crm-pull-confirm" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5 shrink-0">Confirm & Fill</button>
+      </div>
+      <p class="text-xs text-muted mt-2">PO Type and Sales Person aren't in CRM's Sales Order record — you'll still need to set those manually.</p>
+    </div>`;
+}
+
+function wireCRMPullButton() {
+  const btn = document.getElementById('crm-pull-btn');
+  const btnText = document.getElementById('crm-pull-btn-text');
+  const resultBox = document.getElementById('crm-pull-result');
+  let lastMatch = null;
+
+  btn.addEventListener('click', async () => {
+    const controlNo = document.getElementById('crm-pull-input').value.trim();
+    resultBox.innerHTML = '';
+    lastMatch = null;
+    if (!controlNo) {
+      resultBox.innerHTML = `<p class="text-xs text-red-600">Enter a Control No. first.</p>`;
+      return;
+    }
+    btn.disabled = true;
+    btnText.innerHTML = spinnerHtml();
+    try {
+      const so = await fetchCRMSalesOrderByControlNo(controlNo);
+      if (!so) {
+        resultBox.innerHTML = `<p class="text-xs text-red-600">No Sales Order found with that Control No.</p>`;
+      } else {
+        lastMatch = so;
+        resultBox.innerHTML = crmPullResultHtml(so);
+        refreshIcons();
+        document.getElementById('crm-pull-confirm').addEventListener('click', () => {
+          fillPOFormFromCRM(lastMatch);
+        });
+      }
+    } catch (e) {
+      console.error(e);
+      resultBox.innerHTML = `<p class="text-xs text-red-600">Could not reach CRM. Check that the CRM-v2 Firestore rule for salesorders has been updated, and that the Control No. is correct.</p>`;
+    }
+    btn.disabled = false;
+    btnText.textContent = 'Search CRM';
+  });
+}
+
+function fillPOFormFromCRM(so) {
+  const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
+
+  setVal('clientName', so.billedTo && so.billedTo.name);
+  setVal('clientPONumber', so.poNumber);
+  setVal('dateReceived', so.poDate);
+  setVal('crmControlNumber', so.controlNo);
+  setVal('clientContactPerson', so.billedTo && so.billedTo.contactName);
+  setVal('clientContactNumber', so.billedTo && so.billedTo.phone);
+  setVal('poAmount', so.total);
+
+  if (Array.isArray(so.suppliers) && so.suppliers[0] && so.suppliers[0].paymentTerms) {
+    setVal('paymentTerms', so.suppliers[0].paymentTerms);
+  }
+
+  if (Array.isArray(so.items) && so.items.length) {
+    const descriptions = so.items.map(i => i.desc).filter(Boolean).join('; ');
+    setVal('projectDescription', descriptions);
+  }
+
+  const noteParts = [`Pulled from CRM Sales Order ${so.orderNo || ''} (Control No. ${so.controlNo || ''}).`];
+  if (so.notes) noteParts.push(so.notes);
+  setVal('notes', noteParts.join(' '));
+
+  // Recalculate commitment date if a lead time is already set
+  const recalcEvent = new Event('change');
+  document.getElementById('field-dateReceived')?.dispatchEvent(recalcEvent);
 }
 
 async function handleCreatePOSubmit(e) {
@@ -1459,6 +1613,15 @@ async function renderClientPOViewPage(id) {
       <p class="text-sm text-charcoal mt-0.5">${value != null && value !== '' ? value : '—'}</p>
     </div>`;
 
+  const fileRefValue = (value) => {
+    if (!value) return '—';
+    const isLink = /^https?:\/\//i.test(value.trim());
+    if (isLink) {
+      return `<a href="${escapeAttr(value)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-forest hover:underline font-medium">${icon('external-link', 'w-3.5 h-3.5')} Open File</a>`;
+    }
+    return escapeAttr(value);
+  };
+
   contentWrap(`
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
@@ -1488,8 +1651,9 @@ async function renderClientPOViewPage(id) {
 
       <div class="border-t border-borderc pt-6">
         <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${field('PO Date Received', formatDate(po.dateReceived))}
+          ${field('PO Date Forwarded', formatDate(po.poDateForwarded))}
           ${field('Lead Time', po.leadTimeValue != null ? `${po.leadTimeValue} ${po.leadTimeUnit || 'days'}` : '')}
           ${field('Commitment Delivery Date', `${formatDate(po.commitmentDeliveryDate)}${isOverdue(po) ? ' <span class="text-red-600 text-xs font-medium uppercase">Overdue</span>' : ''}`)}
         </div>
@@ -1501,6 +1665,16 @@ async function renderClientPOViewPage(id) {
           ${field('Client Contact Person', escapeAttr(po.clientContactPerson))}
           ${field('Client Contact Number', escapeAttr(po.clientContactNumber))}
           ${field('Sales Person / Account Manager', escapeAttr(po.salesPerson))}
+        </div>
+      </div>
+
+      <div class="border-t border-borderc pt-6">
+        <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber))}
+          ${field('Sales Invoice No.', escapeAttr(po.salesInvoiceNo))}
+          ${field('Delivery Receipt No.', escapeAttr(po.deliveryReceiptNo))}
+          ${field('Collection Receipt No.', escapeAttr(po.collectionReceiptNo))}
         </div>
       </div>
 
@@ -1518,7 +1692,8 @@ async function renderClientPOViewPage(id) {
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${field('Payment Terms', escapeAttr(po.paymentTerms))}
-          ${field('PO Document Reference', escapeAttr(po.poDocumentReference))}
+          ${field('Warranty', escapeAttr(po.warranty))}
+          ${field('Customer PO File', fileRefValue(po.poDocumentReference))}
           ${field('Notes', escapeAttr(po.notes))}
         </div>
       </div>
@@ -1578,8 +1753,9 @@ async function renderClientPOEditPage(id) {
 
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${dateField('dateReceived', 'PO Date Received', { required: true, value: po.dateReceived })}
+          ${dateField('poDateForwarded', 'PO Date Forwarded', { value: po.poDateForwarded })}
           <div>
             <label class="block text-sm font-medium text-charcoal mb-1.5">Lead Time</label>
             <div class="flex gap-2">
@@ -1609,6 +1785,18 @@ async function renderClientPOEditPage(id) {
       </div>
 
       <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('crmControlNumber', 'CRM Quotation Control No.', { value: po.crmControlNumber, placeholder: 'e.g. Q-2026-0142', hint: 'Links back to the won quotation in Mechatrade CRM-v2.' })}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+          ${textField('salesInvoiceNo', 'Sales Invoice No.', { value: po.salesInvoiceNo })}
+          ${textField('deliveryReceiptNo', 'Delivery Receipt No.', { value: po.deliveryReceiptNo })}
+          ${textField('collectionReceiptNo', 'Collection Receipt No.', { value: po.collectionReceiptNo })}
+        </div>
+      </div>
+
+      <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Status & Delivery</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${selectField('status', 'Status', PO_STATUSES, { required: true, value: po.status })}
@@ -1622,7 +1810,8 @@ async function renderClientPOEditPage(id) {
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('paymentTerms', 'Payment Terms', { value: po.paymentTerms, placeholder: 'e.g. 30 days, COD, 50% down' })}
-          ${textField('poDocumentReference', 'PO Document Reference', { value: po.poDocumentReference, placeholder: 'Filename or note' })}
+          ${textField('warranty', 'Warranty', { value: po.warranty, placeholder: 'e.g. 1 year on parts and labor' })}
+          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { value: po.poDocumentReference, placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
         </div>
       </div>
