@@ -1076,8 +1076,23 @@ function wirePOFormAutoCalc() {
     if (el) el.addEventListener('change', recalc);
   });
 }
+function paymentTermsSummary(type, advanceAmount, days, customDays) {
+  if (type === 'Advance Payment') {
+    return `Advance Payment${advanceAmount ? ' — ' + formatCurrency(advanceAmount) : ''}`;
+  }
+  if (type === 'COD') return 'COD';
+  if (type === 'Terms') {
+    const daysLabel = days === 'Custom' ? (customDays ? `Custom — ${customDays} days` : 'Custom') : days;
+    return daysLabel ? `Terms — ${daysLabel}` : 'Terms';
+  }
+  return '';
+}
 function readPOFormValues() {
   const val = (id) => { const el = document.getElementById('field-' + id); return el ? el.value.trim() : ''; };
+  const paymentTermsType = val('paymentTermsType');
+  const advancePaymentAmount = val('advancePaymentAmount') ? Number(val('advancePaymentAmount')) : null;
+  const paymentTermsDays = val('paymentTermsDays');
+  const customPaymentDays = val('customPaymentDays') ? Number(val('customPaymentDays')) : null;
   return {
     clientName: val('clientName'),
     clientPONumber: val('clientPONumber'),
@@ -1097,11 +1112,69 @@ function readPOFormValues() {
     crmControlNumber: val('crmControlNumber'),
     deliveryReceiptNo: val('deliveryReceiptNo'),
     collectionReceiptNo: val('collectionReceiptNo'),
-    paymentTerms: val('paymentTerms'),
+    paymentTermsType,
+    advancePaymentAmount,
+    paymentTermsDays,
+    customPaymentDays,
+    paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
     warranty: val('warranty'),
     poDocumentReference: val('poDocumentReference'),
     notes: val('notes'),
   };
+}
+
+function paymentTermsFieldHtml(v = {}) {
+  const type = v.type || '';
+  const days = v.days || '';
+  return `
+    <div class="sm:col-span-2">
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Payment Terms</label>
+      <select id="field-paymentTermsType" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">Select...</option>
+        <option value="Advance Payment" ${type === 'Advance Payment' ? 'selected' : ''}>Advance payment</option>
+        <option value="COD" ${type === 'COD' ? 'selected' : ''}>COD</option>
+        <option value="Terms" ${type === 'Terms' ? 'selected' : ''}>Terms</option>
+      </select>
+
+      <div id="pt-advance-wrap" class="mt-3 ${type === 'Advance Payment' ? '' : 'hidden'}">
+        <label class="block text-sm font-medium text-charcoal mb-1.5">Advance Payment Amount (₱)</label>
+        <input id="field-advancePaymentAmount" type="number" min="0" step="0.01" value="${v.advanceAmount != null ? v.advanceAmount : ''}"
+          class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      </div>
+
+      <div id="pt-days-wrap" class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4 ${type === 'Terms' ? '' : 'hidden'}">
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">No. of Days Terms</label>
+          <select id="field-paymentTermsDays" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">Select...</option>
+            <option value="Net 7" ${days === 'Net 7' ? 'selected' : ''}>Net 7</option>
+            <option value="Net 15" ${days === 'Net 15' ? 'selected' : ''}>Net 15</option>
+            <option value="Net 30" ${days === 'Net 30' ? 'selected' : ''}>Net 30</option>
+            <option value="Net 60" ${days === 'Net 60' ? 'selected' : ''}>Net 60</option>
+            <option value="Custom" ${days === 'Custom' ? 'selected' : ''}>Custom</option>
+          </select>
+        </div>
+        <div id="pt-custom-wrap" class="${days === 'Custom' ? '' : 'hidden'}">
+          <label class="block text-sm font-medium text-charcoal mb-1.5">Custom — No. of Days</label>
+          <input id="field-customPaymentDays" type="number" min="0" value="${v.customDays != null ? v.customDays : ''}"
+            class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+        </div>
+      </div>
+    </div>`;
+}
+function wirePaymentTermsField() {
+  const typeSel = document.getElementById('field-paymentTermsType');
+  if (!typeSel) return;
+  const daysSel = document.getElementById('field-paymentTermsDays');
+  const syncType = () => {
+    document.getElementById('pt-advance-wrap').classList.toggle('hidden', typeSel.value !== 'Advance Payment');
+    document.getElementById('pt-days-wrap').classList.toggle('hidden', typeSel.value !== 'Terms');
+  };
+  const syncDays = () => {
+    document.getElementById('pt-custom-wrap').classList.toggle('hidden', !daysSel || daysSel.value !== 'Custom');
+  };
+  typeSel.addEventListener('change', syncType);
+  if (daysSel) daysSel.addEventListener('change', syncDays);
 }
 
 /* ---- Shared list table ---- */
@@ -1260,7 +1333,7 @@ function renderNewClientPOPage() {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${textField('paymentTerms', 'Payment Terms', { placeholder: 'e.g. 30 days, COD, 50% down' })}
+          ${paymentTermsFieldHtml()}
           ${textField('warranty', 'Warranty', { placeholder: 'e.g. 1 year on parts and labor' })}
           ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true })}
@@ -1276,6 +1349,7 @@ function renderNewClientPOPage() {
     </form>`);
   refreshIcons();
   wirePOFormAutoCalc();
+  wirePaymentTermsField();
   wireCRMPullButton();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
 }
@@ -1290,7 +1364,7 @@ function crmPullResultHtml(so) {
         </div>
         <button type="button" id="crm-pull-confirm" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5 shrink-0">Confirm & Fill</button>
       </div>
-      <p class="text-xs text-muted mt-2">PO Type and Sales Person aren't in CRM's Sales Order record — you'll still need to set those manually.</p>
+      <p class="text-xs text-muted mt-2">PO Type, Sales Person, and Payment Terms aren't in CRM's Sales Order record — you'll still need to set those manually.</p>
     </div>`;
 }
 
@@ -1341,10 +1415,6 @@ function fillPOFormFromCRM(so) {
   setVal('clientContactPerson', so.billedTo && so.billedTo.contactName);
   setVal('clientContactNumber', so.billedTo && so.billedTo.phone);
   setVal('poAmount', so.total);
-
-  if (Array.isArray(so.suppliers) && so.suppliers[0] && so.suppliers[0].paymentTerms) {
-    setVal('paymentTerms', so.suppliers[0].paymentTerms);
-  }
 
   if (Array.isArray(so.items) && so.items.length) {
     const descriptions = so.items.map(i => i.desc).filter(Boolean).join('; ');
@@ -1809,7 +1879,7 @@ async function renderClientPOEditPage(id) {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${textField('paymentTerms', 'Payment Terms', { value: po.paymentTerms, placeholder: 'e.g. 30 days, COD, 50% down' })}
+          ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays })}
           ${textField('warranty', 'Warranty', { value: po.warranty, placeholder: 'e.g. 1 year on parts and labor' })}
           ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { value: po.poDocumentReference, placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
@@ -1830,6 +1900,7 @@ async function renderClientPOEditPage(id) {
 
   refreshIcons();
   wirePOFormAutoCalc();
+  wirePaymentTermsField();
   document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
 }
 
