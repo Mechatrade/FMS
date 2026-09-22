@@ -677,6 +677,16 @@ function renderRoute() {
     return;
   }
 
+  // Dynamic route: viewing a single Client PO (read-only)
+  if (path.startsWith('client-orders/view/')) {
+    if (!canAccess('client-orders')) { renderNoAccess('Client Orders'); buildBreadcrumb(null, null); return; }
+    const poId = path.substring('client-orders/view/'.length);
+    setActiveNav('client-orders/open-pos', NAV.find(n => n.path === 'client-orders')); // best-effort highlight
+    buildBreadcrumb(NAV.find(n => n.path === 'client-orders'), { name: 'View Client PO' });
+    renderClientPOViewPage(poId);
+    return;
+  }
+
   // Dynamic route: editing a single Client PO (not in NAV, has an id in the path)
   if (path.startsWith('client-orders/edit/')) {
     if (!canAccess('client-orders')) { renderNoAccess('Client Orders'); buildBreadcrumb(null, null); return; }
@@ -1097,7 +1107,7 @@ function poTableHtml(pos, opts = {}) {
                 ` : statusBadge(po.status)}
               </td>
               <td class="px-4 py-3">${po.priority === 'Urgent' ? '<span class="text-red-600 font-medium">Urgent</span>' : 'Normal'}</td>
-              <td class="px-4 py-3 text-right"><a href="#/client-orders/edit/${po.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/client-orders/view/${po.id}" class="text-forest hover:underline text-xs font-medium">View</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -1423,6 +1433,106 @@ async function renderPOMonitoringPage() {
     document.getElementById('po-kpi-container').innerHTML = poLoadErrorHtml();
     document.getElementById('po-activity-container').innerHTML = '';
   }
+}
+
+async function renderClientPOViewPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let po;
+  try {
+    po = await fetchClientPO(id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!po) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <p class="text-sm text-charcoal font-medium">PO not found.</p>
+      <a href="#/client-orders/po-reports" class="mt-4 text-sm text-forest hover:underline">Back to PO Reports</a>
+    </div>`);
+    return;
+  }
+
+  const field = (label, value) => `
+    <div>
+      <p class="text-xs text-muted uppercase tracking-wide">${label}</p>
+      <p class="text-sm text-charcoal mt-0.5">${value != null && value !== '' ? value : '—'}</p>
+    </div>`;
+
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">${escapeAttr(po.clientPONumber)} — ${escapeAttr(po.clientName)}</h1>
+        <p class="text-sm text-muted mt-1">View-only. Use Edit to make changes.</p>
+      </div>
+      <div class="flex items-center gap-3">
+        ${statusBadge(po.status)}
+        <a href="#/client-orders/edit/${po.id}" class="btn-primary text-sm">Edit</a>
+      </div>
+    </div>
+
+    ${po.salesRecognized ? `<div class="mb-4 flex items-center gap-1.5 text-xs font-medium text-forest">${icon('check-circle', 'w-3.5 h-3.5')} Sales Recognized${po.salesRecognizedAt ? ' on ' + formatDate(po.salesRecognizedAt) : ''}</div>` : ''}
+
+    <div class="card p-6 space-y-6 max-w-4xl">
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${field('Client Name', escapeAttr(po.clientName))}
+          ${field('Client PO Number', escapeAttr(po.clientPONumber))}
+          ${field('PO Type', escapeAttr(po.poType))}
+          ${field('Priority', escapeAttr(po.priority))}
+          ${field('Project / Reference / Description', escapeAttr(po.projectDescription))}
+          ${field('PO Amount', formatCurrency(po.poAmount))}
+        </div>
+      </div>
+
+      <div class="border-t border-borderc pt-6">
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Timeline</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${field('PO Date Received', formatDate(po.dateReceived))}
+          ${field('Lead Time', po.leadTimeValue != null ? `${po.leadTimeValue} ${po.leadTimeUnit || 'days'}` : '')}
+          ${field('Commitment Delivery Date', `${formatDate(po.commitmentDeliveryDate)}${isOverdue(po) ? ' <span class="text-red-600 text-xs font-medium uppercase">Overdue</span>' : ''}`)}
+        </div>
+      </div>
+
+      <div class="border-t border-borderc pt-6">
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Contact & Ownership</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          ${field('Client Contact Person', escapeAttr(po.clientContactPerson))}
+          ${field('Client Contact Number', escapeAttr(po.clientContactNumber))}
+          ${field('Sales Person / Account Manager', escapeAttr(po.salesPerson))}
+        </div>
+      </div>
+
+      <div class="border-t border-borderc pt-6">
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Status & Delivery</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${field('Status', statusBadge(po.status))}
+          ${field('Date(s) Delivered', escapeAttr(po.datesDelivered))}
+          ${field('Delivery Notes', escapeAttr(po.deliveryNotes))}
+          ${field('Partial Delivery Details', escapeAttr(po.partialDeliveryDetails))}
+        </div>
+      </div>
+
+      <div class="border-t border-borderc pt-6">
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${field('Payment Terms', escapeAttr(po.paymentTerms))}
+          ${field('PO Document Reference', escapeAttr(po.poDocumentReference))}
+          ${field('Notes', escapeAttr(po.notes))}
+        </div>
+      </div>
+
+      <div class="text-xs text-muted border-t border-borderc pt-4">
+        ${po.createdBy ? `Created by ${escapeAttr(po.createdBy)} · ` : ''}Last updated ${po.updatedBy ? `by ${escapeAttr(po.updatedBy)}` : '—'}
+      </div>
+
+      <div class="flex items-center gap-3">
+        <a href="#/client-orders/edit/${po.id}" class="btn-primary text-sm">Edit</a>
+        <a href="#/client-orders/po-reports" class="text-sm text-muted hover:text-charcoal">Back</a>
+      </div>
+    </div>`);
+  refreshIcons();
 }
 
 async function renderClientPOEditPage(id) {
