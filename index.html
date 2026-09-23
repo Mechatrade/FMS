@@ -1368,7 +1368,7 @@ function crmPullResultHtml(so) {
         </div>
         <button type="button" id="crm-pull-confirm" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5 shrink-0">Confirm & Fill</button>
       </div>
-      <p class="text-xs text-muted mt-2">PO Type, Sales Person, and Payment Terms aren't in CRM's Sales Order record — you'll still need to set those manually.</p>
+      <p class="text-xs text-muted mt-2">PO Type and Sales Person aren't in CRM's Sales Order record — set those manually. Payment Terms fills in automatically only when CRM has a "Net X" value set; Advance Payment / COD aren't captured in CRM yet.</p>
     </div>`;
 }
 
@@ -1419,6 +1419,20 @@ function fillPOFormFromCRM(so) {
   setVal('clientContactPerson', so.billedTo && so.billedTo.contactName);
   setVal('clientContactNumber', so.billedTo && so.billedTo.phone);
   setVal('poAmount', so.total);
+
+  // CRM's Sales Order only stores the "Terms" side of payment terms
+  // (paymentTermsDays / paymentTermsCustomDays) — no equivalent for
+  // Advance Payment or COD yet, so this only fires when CRM has a Net X
+  // value set. Field values are set first, then 'change' is dispatched on
+  // each select so the New Client PO form's own show/hide logic reveals
+  // the right sub-fields, exactly as if picked by hand.
+  if (so.paymentTermsDays) {
+    setVal('paymentTermsType', 'Terms');
+    document.getElementById('field-paymentTermsType')?.dispatchEvent(new Event('change'));
+    setVal('paymentTermsDays', so.paymentTermsDays);
+    document.getElementById('field-paymentTermsDays')?.dispatchEvent(new Event('change'));
+    if (so.paymentTermsCustomDays != null) setVal('customPaymentDays', so.paymentTermsCustomDays);
+  }
 
   if (Array.isArray(so.items) && so.items.length) {
     const descriptions = so.items.map(i => i.desc).filter(Boolean).join('; ');
