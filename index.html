@@ -1085,6 +1085,11 @@ async function fetchAllCRMSuppliers() {
   const snap = await getDocs(collection(crmDb, 'suppliers'));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
+async function fetchCRMSupplierById(id) {
+  if (!crmReady) throw new Error('CRM connection not configured.');
+  const snap = await getDoc(doc(crmDb, 'suppliers', id));
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
 let crmSuppliersCache = null;
 function wireCRMSupplierSearch() {
   const input = document.getElementById('crm-supplier-search');
@@ -1139,6 +1144,7 @@ function fillSupplierFormFromCRM(s) {
   setVal('name', s.name);
   setVal('contactPerson', s.contactPerson);
   setVal('phone', s.phone);
+  setVal('crmSupplierId', s.id);
 
   const noteParts = [`Pulled from CRM supplier record${s.department ? ' (Department: ' + s.department + ')' : ''}.`];
   if (s.lastCanvassDate) noteParts.push(`Last canvassed in CRM: ${s.lastCanvassDate}.`);
@@ -3169,6 +3175,7 @@ async function renderSuppliersPage() {
 }
 function supplierFormFieldsHtml(s = {}) {
   return `
+    <input type="hidden" id="field-crmSupplierId" value="${escapeAttr(s.crmSupplierId)}" />
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       ${textField('name', 'Supplier Name', { required: true, value: s.name })}
       ${selectField('category', 'Category', SUPPLIER_CATEGORIES, { required: true, value: s.category })}
@@ -3202,6 +3209,7 @@ function readSupplierFormValues() {
     verified: document.getElementById('field-verified')?.checked || false,
     paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays,
     paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
+    crmSupplierId: val('crmSupplierId'),
     notes: val('notes'),
   };
 }
@@ -3277,6 +3285,17 @@ async function renderEditSupplierPage(id) {
       <h1 class="text-xl font-semibold text-charcoal">Edit Supplier</h1>
       <p class="text-sm text-muted mt-1">${escapeAttr(s.name)}</p>
     </div>
+    ${s.crmSupplierId ? `
+    <div class="card p-5 mb-6 max-w-3xl flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-0.5">Linked to CRM</h2>
+        <p class="text-xs text-muted">Pull the latest Name, Contact Person, and Phone from this supplier's CRM record.</p>
+      </div>
+      <button type="button" id="crm-resync-btn" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">
+        <span id="crm-resync-btn-text">Re-sync from CRM</span>
+      </button>
+    </div>
+    <p id="crm-resync-status" class="text-xs text-muted -mt-4 mb-6 max-w-3xl"></p>` : ''}
     <form id="supplier-form" class="card p-6 space-y-4 max-w-3xl">
       <div id="supplier-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       ${supplierFormFieldsHtml(s)}
@@ -3287,6 +3306,27 @@ async function renderEditSupplierPage(id) {
     </form>`);
   refreshIcons();
   wirePaymentTermsField();
+  if (s.crmSupplierId) {
+    document.getElementById('crm-resync-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('crm-resync-btn');
+      const btnText = document.getElementById('crm-resync-btn-text');
+      const statusEl = document.getElementById('crm-resync-status');
+      btn.disabled = true; btnText.innerHTML = spinnerHtml();
+      try {
+        const crmSupplier = await fetchCRMSupplierById(s.crmSupplierId);
+        if (!crmSupplier) {
+          statusEl.textContent = 'This supplier no longer exists in CRM (it may have been deleted or renamed).';
+        } else {
+          fillSupplierFormFromCRM(crmSupplier);
+          statusEl.textContent = 'Updated from CRM — review the fields below, then Save Changes to keep them.';
+        }
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Could not reach CRM. Check that the CRM-v2 Firestore rule for suppliers has been updated.';
+      }
+      btn.disabled = false; btnText.textContent = 'Re-sync from CRM';
+    });
+  }
   document.getElementById('supplier-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('supplier-form-submit');
