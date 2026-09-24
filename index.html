@@ -929,6 +929,14 @@ function renderRoute() {
     renderDisbursementVoucherDetailPage(dvId);
     return;
   }
+  if (path.startsWith('disbursement/vouchers/edit/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const dvId = path.substring('disbursement/vouchers/edit/'.length);
+    setActiveNav('disbursement/vouchers', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Edit & Resubmit' });
+    renderEditDisbursementVoucherPage(dvId);
+    return;
+  }
   if (path.startsWith('disbursement/petty-cash/new-voucher/')) {
     if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
     const fundId = path.substring('disbursement/petty-cash/new-voucher/'.length);
@@ -2883,7 +2891,7 @@ function expenseTableHtml(entries) {
               <td class="px-4 py-3">${e.payee || '—'}</td>
               <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
               <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
-              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'}">${e.status === 'Paid' ? 'Paid' : 'For Request Disbursement'}</span></td>
               <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
@@ -5101,10 +5109,17 @@ async function generateSeriesNumber(collectionName, prefix, field) {
   const count = all.filter(d => (d[field] || '').startsWith(yearPrefix)).length;
   return `${yearPrefix}${String(count + 1).padStart(4, '0')}`;
 }
+function dvStatusLabel(status) {
+  const map = { 'Pending': 'Pending for Approval' };
+  return map[status] || status;
+}
+function dvStatusBadge(status) {
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadgeClass(status)}">${dvStatusLabel(status)}</span>`;
+}
 function voucherStampHtml(status) {
   const map = {
-    'Pending': { label: 'PENDING', cls: 'text-amber-500 border-amber-500' },
-    'Pending Approval': { label: 'PENDING', cls: 'text-amber-500 border-amber-500' },
+    'Pending': { label: 'PENDING APPROVAL', cls: 'text-amber-500 border-amber-500' },
+    'Pending Approval': { label: 'PENDING APPROVAL', cls: 'text-amber-500 border-amber-500' },
     'Approved': { label: 'APPROVED', cls: 'text-blue-500 border-blue-500' },
     'Paid': { label: 'PAID', cls: 'text-forest border-forest' },
     'Outstanding': { label: 'OUTSTANDING', cls: 'text-orange-500 border-orange-500' },
@@ -5243,7 +5258,7 @@ function dvTableHtml(vouchers) {
               <td class="px-4 py-3">${v.accountTitle || '—'}</td>
               <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
               <td class="px-4 py-3">${formatDate(v.dateRequested)}</td>
-              <td class="px-4 py-3">${statusBadge(v.status)}</td>
+              <td class="px-4 py-3">${dvStatusBadge(v.status)}</td>
               <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="text-forest hover:underline text-xs font-medium">View</a></td>
             </tr>`).join('')}
         </tbody>
@@ -5418,7 +5433,7 @@ function dvDetailCardHtml(v) {
   return `
     <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
       ${voucherStampHtml(v.status)}
-      ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', v.number, v.status, 'Date Requested', formatDate(v.dateRequested))}
+      ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', v.number, dvStatusLabel(v.status), 'Date Requested', formatDate(v.dateRequested))}
       <div class="grid grid-cols-2 gap-4 text-sm mt-6">
         <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.payee)}</p></div>
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
@@ -5433,6 +5448,8 @@ function dvDetailCardHtml(v) {
         ${v.datePaid ? `<div><p class="text-xs text-muted uppercase">Date Paid</p><p class="font-medium text-charcoal mt-0.5">${formatDate(v.datePaid)}</p></div>` : ''}
         ${v.batchId ? `<div><p class="text-xs text-muted uppercase">Encashment Batch</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.batchNumber || v.batchId)}</p></div>` : ''}
       </div>
+      ${v.rejectionReason ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-1">Reason for Rejection</p><p class="text-sm text-charcoal">${escapeAttr(v.rejectionReason)}</p></div>` : ''}
+      ${v.cancellationReason ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-1">Reason for Cancellation</p><p class="text-sm text-charcoal">${escapeAttr(v.cancellationReason)}</p></div>` : ''}
       ${linesHtml ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-2">Breakdown</p>${linesHtml}</div>` : ''}
       <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
         <div><p class="text-xs text-muted">Prepared By</p><p class="font-medium text-charcoal mt-6 border-t border-borderc pt-1">${escapeAttr(v.requestedBy)}</p></div>
@@ -5440,6 +5457,25 @@ function dvDetailCardHtml(v) {
       </div>
       ${voucherFooterHtml()}
     </div>`;
+}
+function showVoucherNotePrompt(container, opts) {
+  container.innerHTML = `
+    <div class="card p-4 max-w-2xl">
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${opts.title} <span class="text-red-500">*</span></label>
+      <textarea id="voucher-note-input" rows="3" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"></textarea>
+      <p id="voucher-note-error" class="hidden text-xs text-red-600 mt-1">Please enter a reason.</p>
+      <div class="flex gap-3 mt-3">
+        <button type="button" id="voucher-note-confirm" class="btn-glass-sm text-sm">${opts.confirmLabel}</button>
+        <button type="button" id="voucher-note-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+      </div>
+    </div>`;
+  document.getElementById('voucher-note-dismiss').addEventListener('click', () => { container.innerHTML = ''; });
+  document.getElementById('voucher-note-confirm').addEventListener('click', async () => {
+    const notes = document.getElementById('voucher-note-input').value.trim();
+    if (!notes) { document.getElementById('voucher-note-error').classList.remove('hidden'); return; }
+    document.getElementById('voucher-note-confirm').disabled = true;
+    await opts.onConfirm(notes);
+  });
 }
 async function renderDisbursementVoucherDetailPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
@@ -5463,10 +5499,12 @@ async function renderDisbursementVoucherDetailPage(id) {
     </div>
     ${dvDetailCardHtml(v)}
     <div id="dv-detail-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 print:hidden"></div>
-    <div class="max-w-2xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden" id="dv-detail-actions"></div>`);
+    <div class="max-w-2xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden" id="dv-detail-actions"></div>
+    <div class="max-w-2xl mx-auto mt-3 print:hidden" id="dv-detail-prompt"></div>`);
   refreshIcons();
 
   const actions = document.getElementById('dv-detail-actions');
+  const promptBox = document.getElementById('dv-detail-prompt');
   const errBox = document.getElementById('dv-detail-error');
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
@@ -5476,6 +5514,9 @@ async function renderDisbursementVoucherDetailPage(id) {
   }
   if (v.status === 'Pending') {
     buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm text-muted hover:text-charcoal">Cancel Request</button>`);
+  }
+  if (v.status === 'Rejected' || v.status === 'Cancelled') {
+    buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
   }
   buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
   actions.innerHTML = buttons.join('');
@@ -5503,30 +5544,138 @@ async function renderDisbursementVoucherDetailPage(id) {
       setBusy(false);
     }
   });
-  document.getElementById('dv-reject-btn')?.addEventListener('click', async () => {
-    setBusy(true);
-    try {
-      await updateFinanceDoc('disbursementVouchers', id, { status: 'Rejected', rejectedBy: currentUser.email, dateRejected: todayISO() });
-      refreshApprovalsBadge();
-      renderDisbursementVoucherDetailPage(id);
-    } catch (e) {
-      console.error(e);
-      errBox.textContent = 'Could not reject this voucher. Please try again.';
-      errBox.classList.remove('hidden');
-      setBusy(false);
-    }
+
+  document.getElementById('dv-reject-btn')?.addEventListener('click', () => {
+    showVoucherNotePrompt(promptBox, {
+      title: 'Reason for Rejection',
+      confirmLabel: 'Confirm Reject',
+      onConfirm: async (notes) => {
+        try {
+          await updateFinanceDoc('disbursementVouchers', id, { status: 'Rejected', rejectedBy: currentUser.email, dateRejected: todayISO(), rejectionReason: notes });
+          refreshApprovalsBadge();
+          renderDisbursementVoucherDetailPage(id);
+        } catch (e) {
+          console.error(e);
+          errBox.textContent = 'Could not reject this voucher. Please try again.';
+          errBox.classList.remove('hidden');
+        }
+      },
+    });
   });
-  document.getElementById('dv-cancel-btn')?.addEventListener('click', async () => {
-    setBusy(true);
+
+  document.getElementById('dv-cancel-btn')?.addEventListener('click', () => {
+    showVoucherNotePrompt(promptBox, {
+      title: 'Reason for Cancellation',
+      confirmLabel: 'Confirm Cancel',
+      onConfirm: async (notes) => {
+        try {
+          await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO(), cancellationReason: notes });
+          refreshApprovalsBadge();
+          renderDisbursementVoucherDetailPage(id);
+        } catch (e) {
+          console.error(e);
+          errBox.textContent = 'Could not cancel this voucher. Please try again.';
+          errBox.classList.remove('hidden');
+        }
+      },
+    });
+  });
+}
+
+async function renderEditDisbursementVoucherPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let v, bankAccounts = [], maxAmount = null;
+  try {
+    [v, bankAccounts] = await Promise.all([fetchFinanceDoc('disbursementVouchers', id), fetchActiveBankAccounts()]);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!v) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Voucher not found.</p><a href="#/disbursement/vouchers" class="mt-4 text-sm text-forest hover:underline">Back to Disbursement Vouchers</a></div>`);
+    return;
+  }
+  if (v.status !== 'Rejected' && v.status !== 'Cancelled') {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Only a Rejected or Cancelled voucher can be edited.</p><a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a></div>`);
+    return;
+  }
+
+  if (v.type === 'Regular Payment' && v.sourceCollection && v.sourceId) {
     try {
-      await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO() });
-      refreshApprovalsBadge();
-      renderDisbursementVoucherDetailPage(id);
-    } catch (e) {
-      console.error(e);
-      errBox.textContent = 'Could not cancel this voucher. Please try again.';
+      const source = await fetchFinanceDoc(v.sourceCollection, v.sourceId);
+      if (source) {
+        maxAmount = v.sourceCollection === 'accountsPayable' ? source.balance : (v.sourceCollection === 'expenses' ? source.amount : source.taxAmount);
+      }
+    } catch (e) { console.error(e); }
+  }
+
+  const priorReason = v.status === 'Rejected' ? v.rejectionReason : v.cancellationReason;
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Edit & Resubmit</h1>
+      <p class="text-sm text-muted mt-1">${v.number} — ${escapeAttr(v.payee)}</p>
+    </div>
+    <div class="card p-4 max-w-2xl mb-4 bg-amber-50 border border-amber-200">
+      <p class="text-xs text-muted uppercase mb-1">Previously ${v.status}</p>
+      <p class="text-sm text-charcoal">${escapeAttr(priorReason) || '—'}</p>
+    </div>
+    <form id="dv-edit-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="dv-edit-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: v.amount })}
+        ${selectField('modeOfPayment', 'Mode of Payment', MODE_OF_PAYMENT_OPTIONS, { required: true, value: v.modeOfPayment })}
+        ${bankAccountSelectHtml(bankAccounts, v.bankAccountId, { required: true })}
+        ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, required: true, value: v.purpose })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="dv-edit-submit" type="submit" class="btn-primary"><span id="dv-edit-submit-text">Resubmit for Approval</span></button>
+        <a href="#/disbursement/vouchers/view/${id}" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('dv-edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('dv-edit-submit');
+    const btnText = document.getElementById('dv-edit-submit-text');
+    const errBox = document.getElementById('dv-edit-form-error');
+    errBox.classList.add('hidden');
+
+    const amount = Number(document.getElementById('field-dvAmount').value) || 0;
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const purpose = document.getElementById('field-dvPurpose').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel.value;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!amount || amount <= 0 || !modeOfPayment || !purpose || !bankAccountId) {
+      errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
-      setBusy(false);
+      return;
+    }
+    if (maxAmount != null && amount > maxAmount + 0.01) {
+      errBox.textContent = `Amount cannot exceed ${formatCurrency(maxAmount)}.`;
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('disbursementVouchers', id, {
+        amount, modeOfPayment, purpose, bankAccountId, bankAccountName,
+        status: 'Pending', dateRequested: todayISO(),
+        rejectedBy: null, dateRejected: null, rejectionReason: null,
+        cancelledBy: null, dateCancelled: null, cancellationReason: null,
+      });
+      refreshApprovalsBadge();
+      navigateTo('disbursement/vouchers/view/' + id);
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not resubmit this voucher. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Resubmit for Approval';
     }
   });
 }
