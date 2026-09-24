@@ -51,6 +51,16 @@
   .fade-in { animation: fadeIn .18s ease-out; }
   @keyframes fadeIn { from { opacity:0; transform: translateY(2px);} to {opacity:1; transform:translateY(0);} }
   [data-page]:not(.active-page) { display:none; }
+
+  /* Voucher stamps */
+  .voucher-stamp { pointer-events: none; user-select: none; }
+
+  @media print {
+    #sidebar, header, #sidebar-backdrop, .print\:hidden { display: none !important; }
+    body { background: #fff !important; }
+    main#content { padding: 0 !important; }
+    #voucher-print-area { box-shadow: none !important; border: 1px solid #999 !important; }
+  }
 </style>
 </head>
 <body>
@@ -207,6 +217,17 @@ const NAV = [
       { name: "Cash Position", path: "cash-management/cash-position", description: "View current cash position." },
       { name: "Bank Reconciliation", path: "cash-management/bank-reconciliation", description: "Reconcile bank statements against records." },
       { name: "Cash Forecast", path: "cash-management/cash-forecast", description: "Forecast future cash flow." },
+    ]
+  },
+  {
+    name: "Disbursement", icon: "receipt-text", path: "disbursement",
+    description: "Disbursement vouchers, encashment batching, petty cash, and cash advances.",
+    children: [
+      { name: "Disbursement Vouchers", path: "disbursement/vouchers", description: "Request and approve payment disbursements." },
+      { name: "Encashment Batch", path: "disbursement/encashment-batch", description: "Group approved cash vouchers into one withdrawal." },
+      { name: "Petty Cash", path: "disbursement/petty-cash", description: "Petty cash funds and vouchers." },
+      { name: "Cash Advances", path: "disbursement/cash-advances", description: "Employee cash advance requests and liquidation." },
+      { name: "Encashment Summary", path: "disbursement/encashment-summary", description: "Report of processed encashment batches." },
     ]
   },
   {
@@ -750,30 +771,8 @@ function renderRoute() {
     renderARPaymentPage(arId);
     return;
   }
-  if (path.startsWith('finance/ap/payment/')) {
-    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
-    const apId = path.substring('finance/ap/payment/'.length);
-    setActiveNav('finance/accounts-payable', NAV.find(n => n.path === 'finance'));
-    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Record Payment' });
-    renderAPPaymentPage(apId);
-    return;
-  }
-  if (path.startsWith('finance/expenses/pay/')) {
-    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
-    const expId = path.substring('finance/expenses/pay/'.length);
-    setActiveNav('finance/expenses', NAV.find(n => n.path === 'finance'));
-    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Mark Paid' });
-    renderExpensePaymentPage(expId);
-    return;
-  }
-  if (path.startsWith('finance/tax/pay/')) {
-    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
-    const taxId = path.substring('finance/tax/pay/'.length);
-    setActiveNav('finance/tax', NAV.find(n => n.path === 'finance'));
-    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Mark Paid' });
-    renderTaxPaymentPage(taxId);
-    return;
-  }
+  // AP/Expense/Tax payments now go through Disbursement Vouchers
+  // (see disbursement/vouchers/new/... routes below) — no direct-pay route.
 
   // Dynamic Procurement routes (not in NAV — reached via buttons/links on the Procurement pages)
   const procurementEditRoutes = [
@@ -842,6 +841,72 @@ function renderRoute() {
     setActiveNav('cash-management/bank-reconciliation', NAV.find(n => n.path === 'cash-management'));
     buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'New Reconciliation' });
     renderNewReconciliationPage(bankId);
+    return;
+  }
+
+  // Dynamic Disbursement routes (not in NAV — reached via buttons/links on the Disbursement pages)
+  if (path.startsWith('disbursement/vouchers/new/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const rest = path.substring('disbursement/vouchers/new/'.length);
+    const [sourceCollection, sourceId] = rest.split('/');
+    setActiveNav('disbursement/vouchers', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Request Disbursement' });
+    renderNewDisbursementVoucherPage(sourceCollection, sourceId);
+    return;
+  }
+  if (path.startsWith('disbursement/vouchers/view/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const dvId = path.substring('disbursement/vouchers/view/'.length);
+    setActiveNav('disbursement/vouchers', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Disbursement Voucher' });
+    renderDisbursementVoucherDetailPage(dvId);
+    return;
+  }
+  if (path.startsWith('disbursement/petty-cash/new-voucher/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const fundId = path.substring('disbursement/petty-cash/new-voucher/'.length);
+    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'New Petty Cash Voucher' });
+    renderNewPettyCashVoucherPage(fundId);
+    return;
+  }
+  if (path.startsWith('disbursement/petty-cash/vouchers/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const fundId = path.substring('disbursement/petty-cash/vouchers/'.length);
+    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Petty Cash Vouchers' });
+    renderPettyCashVouchersListPage(fundId);
+    return;
+  }
+  if (path.startsWith('disbursement/petty-cash/replenish/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const fundId = path.substring('disbursement/petty-cash/replenish/'.length);
+    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Request Replenishment' });
+    renderNewReplenishmentPage(fundId);
+    return;
+  }
+  if (path === 'disbursement/cash-advances/new') {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    setActiveNav('disbursement/cash-advances', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'New Cash Advance' });
+    renderNewCashAdvancePage();
+    return;
+  }
+  if (path.startsWith('disbursement/cash-advances/liquidate/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const caId = path.substring('disbursement/cash-advances/liquidate/'.length);
+    setActiveNav('disbursement/cash-advances', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Liquidate Cash Advance' });
+    renderCashAdvanceLiquidationPage(caId);
+    return;
+  }
+  if (path.startsWith('disbursement/cash-advances/view/')) {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    const caId = path.substring('disbursement/cash-advances/view/'.length);
+    setActiveNav('disbursement/cash-advances', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Cash Advance' });
+    renderCashAdvanceDetailPage(caId);
     return;
   }
 
@@ -920,6 +985,19 @@ function renderRoute() {
   };
   if (cashManagementPages[path]) {
     cashManagementPages[path]();
+    return;
+  }
+
+  // Disbursement module — real pages instead of placeholders
+  const disbursementPages = {
+    'disbursement/vouchers': renderDisbursementVouchersPage,
+    'disbursement/encashment-batch': renderEncashmentBatchPage,
+    'disbursement/petty-cash': renderPettyCashPage,
+    'disbursement/cash-advances': renderCashAdvancesPage,
+    'disbursement/encashment-summary': renderEncashmentSummaryPage,
+  };
+  if (disbursementPages[path]) {
+    disbursementPages[path]();
     return;
   }
 
@@ -1067,6 +1145,11 @@ function statusBadgeClass(status) {
     'Rejected': 'bg-red-50 text-red-600 border-red-200',
     'Active': 'bg-teal-50 text-teal-700 border-teal-200',
     'Inactive': 'bg-gray-100 text-gray-600 border-gray-300',
+    'Paid': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Pending Approval': 'bg-amber-50 text-amber-700 border-amber-200',
+    'Outstanding': 'bg-orange-50 text-orange-700 border-orange-200',
+    'Liquidated': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Processed': 'bg-teal-50 text-teal-700 border-teal-200',
   };
   return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
 }
@@ -2169,12 +2252,13 @@ const ACCOUNTS_CHART = [
   'Utilities Expense', 'Rent Expense', 'Salaries Expense', 'Supplies Expense',
   'Transportation Expense', 'Professional Fees Expense', 'Repairs & Maintenance Expense',
   'Taxes & Licenses Expense', 'Miscellaneous Expense',
-  "Owner's Capital", "Owner's Drawings", 'Other Income',
+  "Owner's Capital", "Owner's Drawings", 'Other Income', 'Advances to Employees',
 ];
 const EXPENSE_ACCOUNTS = ACCOUNTS_CHART.filter(a => a.endsWith('Expense'));
 const CASH_OFFSET_ACCOUNTS = ["Owner's Capital", "Owner's Drawings", 'Other Income', 'Sales Revenue', ...EXPENSE_ACCOUNTS, 'Accounts Receivable', 'Accounts Payable'];
 const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
+const MODE_OF_PAYMENT_OPTIONS = ['Cash', 'Cheque', 'Debit Memo', 'Others'];
 
 function spinnerHtml() {
   return `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
@@ -2527,7 +2611,7 @@ function apTableHtml(entries) {
               <td class="px-4 py-3 font-medium">${formatCurrency(e.balance)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${apStatusBadgeClass(e.status)}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/ap/payment/${e.id}" class="text-forest hover:underline text-xs font-medium">Record Payment</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/accountsPayable/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2725,7 +2809,7 @@ function expenseTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
               <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/expenses/pay/${e.id}" class="text-forest hover:underline text-xs font-medium">Mark Paid</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -3057,7 +3141,7 @@ function taxTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.taxAmount)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${taxFilingBadgeClass(e.filingStatus)}">${e.filingStatus}</span></td>
-              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<a href="#/finance/tax/pay/${e.id}" class="text-forest hover:underline text-xs font-medium">Mark Paid</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<a href="#/disbursement/vouchers/new/taxRecords/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -4287,7 +4371,7 @@ async function renderSupplierPaymentsPage() {
    bankReconciliations — balances computed from generalLedger entries
    tagged with a bankAccountId)
    ========================================================================== */
-const BANK_ACCOUNT_TYPES = ['Checking', 'Savings', 'Other'];
+const BANK_ACCOUNT_TYPES = ['Checking', 'Savings', 'Cash', 'Other'];
 const BANK_ACCOUNT_STATUSES = ['Active', 'Inactive'];
 const CASH_TXN_TYPES = ['Deposit', 'Withdrawal', 'Transfer'];
 
@@ -4918,6 +5002,1247 @@ async function renderCashForecastPage() {
   } catch (e) {
     console.error(e);
     document.getElementById('forecast-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+
+/* ==========================================================================
+   DISBURSEMENT MODULE  (Firestore-backed: disbursementVouchers,
+   pettyCashVouchers, cashAdvances, encashmentBatches — Cash Funds reuse
+   bankAccounts with accountType 'Cash')
+   ========================================================================== */
+const DV_TYPES = ['Regular Payment', 'Petty Cash Replenishment', 'Cash Advance Release'];
+const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Cancelled'];
+const CA_AGING_DAYS = 30;
+
+function canApproveDisbursements() {
+  return !!(currentProfile && currentProfile.role !== 'finance_staff');
+}
+async function generateSeriesNumber(collectionName, prefix, field) {
+  const year = new Date().getFullYear();
+  const all = await fetchFinanceCollection(collectionName);
+  const yearPrefix = `${prefix}-${year}-`;
+  const count = all.filter(d => (d[field] || '').startsWith(yearPrefix)).length;
+  return `${yearPrefix}${String(count + 1).padStart(4, '0')}`;
+}
+function voucherStampHtml(status) {
+  const map = {
+    'Pending': { label: 'PENDING', cls: 'text-amber-500 border-amber-500' },
+    'Pending Approval': { label: 'PENDING', cls: 'text-amber-500 border-amber-500' },
+    'Approved': { label: 'APPROVED', cls: 'text-blue-500 border-blue-500' },
+    'Paid': { label: 'PAID', cls: 'text-forest border-forest' },
+    'Outstanding': { label: 'OUTSTANDING', cls: 'text-orange-500 border-orange-500' },
+    'Liquidated': { label: 'LIQUIDATED', cls: 'text-forest border-forest' },
+    'Rejected': { label: 'REJECTED', cls: 'text-red-500 border-red-500' },
+    'Cancelled': { label: 'CANCELLED', cls: 'text-gray-400 border-gray-400' },
+  };
+  const s = map[status] || map['Pending'];
+  return `<div class="voucher-stamp absolute inset-0 flex items-center justify-center overflow-hidden">
+    <div class="border-4 ${s.cls} rounded-lg px-6 py-2 -rotate-12 opacity-60">
+      <span class="text-3xl font-extrabold tracking-widest ${s.cls.split(' ')[0]}">${s.label}</span>
+    </div>
+  </div>`;
+}
+function voucherActionsBarHtml() {
+  return `<div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden" id="voucher-actions"></div>`;
+}
+
+/* ---- Payment execution (called on immediate-approve or batch-process) ---- */
+async function executeRegularPaymentDV(dv) {
+  const { sourceCollection, sourceId, amount, modeOfPayment, bankAccountId, bankAccountName, datePaid, number } = dv;
+  if (sourceCollection === 'accountsPayable') {
+    const ap = await fetchFinanceDoc('accountsPayable', sourceId);
+    const newAmountPaid = Number(((ap.amountPaid || 0) + amount).toFixed(2));
+    const newBalance = Number((ap.amount - newAmountPaid).toFixed(2));
+    const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
+    const payments = Array.isArray(ap.payments) ? [...ap.payments] : [];
+    payments.push({ date: datePaid, amount, method: modeOfPayment, notes: `DV ${number}`, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
+    await updateFinanceDoc('accountsPayable', sourceId, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
+    await postGLEntries([
+      { date: datePaid, account: 'Accounts Payable', debit: amount, credit: 0, description: `Payment made — ${ap.payee} (DV ${number})`, sourceType: 'ap-payment', sourceId },
+      { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: `Payment made — ${ap.payee} (DV ${number})`, sourceType: 'ap-payment', sourceId, bankAccountId },
+    ]);
+  } else if (sourceCollection === 'expenses') {
+    const exp = await fetchFinanceDoc('expenses', sourceId);
+    await updateFinanceDoc('expenses', sourceId, { status: 'Paid', datePaid, bankAccountId, bankAccountName });
+    await postGLEntries([
+      { date: datePaid, account: exp.category, debit: exp.amount, credit: 0, description: `Expense paid — ${exp.category} (DV ${number})`, sourceType: 'expense', sourceId },
+      { date: datePaid, account: bankAccountName, debit: 0, credit: exp.amount, description: `Expense paid — ${exp.category} (DV ${number})`, sourceType: 'expense', sourceId, bankAccountId },
+    ]);
+  } else if (sourceCollection === 'taxRecords') {
+    const tax = await fetchFinanceDoc('taxRecords', sourceId);
+    await updateFinanceDoc('taxRecords', sourceId, { filingStatus: 'Paid', datePaid, bankAccountId, bankAccountName });
+    await postGLEntries([
+      { date: datePaid, account: 'Taxes & Licenses Expense', debit: tax.taxAmount, credit: 0, description: `Tax paid (DV ${number})`, sourceType: 'tax', sourceId },
+      { date: datePaid, account: bankAccountName, debit: 0, credit: tax.taxAmount, description: `Tax paid (DV ${number})`, sourceType: 'tax', sourceId, bankAccountId },
+    ]);
+  }
+}
+async function executeReplenishmentDV(dv) {
+  const { accountTitleBreakdown, bankAccountName, bankAccountId, datePaid, number, pcvIds, id, batchId } = dv;
+  const glLines = (accountTitleBreakdown || []).map(item => ({
+    date: datePaid, account: item.account, debit: item.amount, credit: 0,
+    description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id,
+  }));
+  glLines.push({ date: datePaid, account: bankAccountName, debit: 0, credit: dv.amount, description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id, bankAccountId });
+  await postGLEntries(glLines);
+  for (const pcvId of (pcvIds || [])) {
+    await updateFinanceDoc('pettyCashVouchers', pcvId, { replenished: true, replenishmentBatchId: batchId || null });
+  }
+}
+async function executeCashAdvanceReleaseDV(dv) {
+  const { amount, bankAccountName, bankAccountId, datePaid, number, cashAdvanceId } = dv;
+  await postGLEntries([
+    { date: datePaid, account: 'Advances to Employees', debit: amount, credit: 0, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId },
+    { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId, bankAccountId },
+  ]);
+  await updateFinanceDoc('cashAdvances', cashAdvanceId, { status: 'Outstanding', dateReleased: datePaid, bankAccountId, bankAccountName });
+}
+async function executeDisbursementVoucher(dv) {
+  if (dv.type === 'Regular Payment') return executeRegularPaymentDV(dv);
+  if (dv.type === 'Petty Cash Replenishment') return executeReplenishmentDV(dv);
+  if (dv.type === 'Cash Advance Release') return executeCashAdvanceReleaseDV(dv);
+}
+async function dvRequiresBatching(dv) {
+  if (dv.type !== 'Regular Payment') return true;
+  if (!dv.bankAccountId) return false;
+  const bankAccount = await fetchFinanceDoc('bankAccounts', dv.bankAccountId);
+  return !!(bankAccount && bankAccount.accountType === 'Cash');
+}
+
+/* ---- Disbursement Vouchers: list ---- */
+function dvTableHtml(vouchers) {
+  if (!vouchers.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No disbursement vouchers yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">DV #</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Account Title</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Requested</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${vouchers.map(v => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${v.number || '—'}</td>
+              <td class="px-4 py-3">${v.type || '—'}</td>
+              <td class="px-4 py-3">${v.payee || '—'}</td>
+              <td class="px-4 py-3">${v.accountTitle || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
+              <td class="px-4 py-3">${formatDate(v.dateRequested)}</td>
+              <td class="px-4 py-3">${statusBadge(v.status)}</td>
+              <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="text-forest hover:underline text-xs font-medium">View</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function renderDisbursementVouchersPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Disbursement Vouchers</h1>
+      <p class="text-sm text-muted mt-1">All payment requests, approvals, and cash releases. Use Request Disbursement from Accounts Payable, Expenses, or Tax to create one.</p>
+    </div>
+    <div id="dv-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const vouchers = await fetchFinanceCollection('disbursementVouchers');
+    document.getElementById('dv-list-container').innerHTML = dvTableHtml(vouchers);
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('dv-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ---- Disbursement Vouchers: request (Regular Payment only — Replenishment/CA Release are created from their own pages) ---- */
+async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let sourceRecord, bankAccounts = [];
+  try {
+    [sourceRecord, bankAccounts] = await Promise.all([fetchFinanceDoc(sourceCollection, sourceId), fetchActiveBankAccounts()]);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!sourceRecord) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Record not found.</p><a href="#/disbursement/vouchers" class="mt-4 text-sm text-forest hover:underline">Back to Disbursement Vouchers</a></div>`);
+    return;
+  }
+
+  let payee, accountTitle, maxAmount, defaultAmount, backHref;
+  if (sourceCollection === 'accountsPayable') {
+    payee = sourceRecord.payee || sourceRecord.clientName;
+    accountTitle = sourceRecord.category || 'Accounts Payable';
+    maxAmount = sourceRecord.balance;
+    defaultAmount = sourceRecord.balance;
+    backHref = 'finance/accounts-payable';
+  } else if (sourceCollection === 'expenses') {
+    payee = sourceRecord.payee || sourceRecord.category;
+    accountTitle = sourceRecord.category;
+    maxAmount = sourceRecord.amount;
+    defaultAmount = sourceRecord.amount;
+    backHref = 'finance/expenses';
+  } else if (sourceCollection === 'taxRecords') {
+    payee = `${sourceRecord.taxType} — ${sourceRecord.period}`;
+    accountTitle = 'Taxes & Licenses Expense';
+    maxAmount = sourceRecord.taxAmount;
+    defaultAmount = sourceRecord.taxAmount;
+    backHref = 'finance/tax';
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Request Disbursement</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(payee)} · ${escapeAttr(accountTitle)}</p>
+    </div>
+    <form id="dv-req-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="dv-req-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: defaultAmount })}
+        ${dateField('dvDate', 'Date Requested', { required: true, value: todayISO() })}
+        ${selectField('modeOfPayment', 'Mode of Payment', MODE_OF_PAYMENT_OPTIONS, { required: true, value: 'Cash' })}
+        ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
+        ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, value: `Payment — ${accountTitle}` })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="dv-req-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/${backHref}" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="dv-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+
+  document.getElementById('dv-req-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('dv-req-form-error');
+    errBox.classList.add('hidden');
+    const amount = Number(document.getElementById('field-dvAmount').value) || 0;
+    const date = document.getElementById('field-dvDate').value;
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const purpose = document.getElementById('field-dvPurpose').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel.value;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!amount || amount <= 0 || !date || !bankAccountId) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (maxAmount != null && amount > maxAmount + 0.01) {
+      errBox.textContent = `Amount cannot exceed ${formatCurrency(maxAmount)}.`;
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
+    const draft = {
+      number: previewNumber, type: 'Regular Payment', payee, amount, purpose,
+      modeOfPayment, bankAccountId, bankAccountName, accountTitle,
+      sourceCollection, sourceId, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
+    };
+
+    document.getElementById('dv-req-form').classList.add('hidden');
+    const wrap = document.getElementById('dv-preview-wrap');
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+        ${voucherStampHtml('Pending')}
+        <div class="text-center mb-6">
+          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
+          <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher</h2>
+          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.dateRequested)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
+          <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
+          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
+          <div><p class="text-xs text-muted">Prepared By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
+          <div><p class="text-xs text-muted">Approved By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
+        </div>
+      </div>
+      <div id="dv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
+        <button type="button" id="dv-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
+        <button type="button" id="dv-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
+      </div>`;
+    refreshIcons();
+
+    document.getElementById('dv-preview-back').addEventListener('click', () => {
+      wrap.classList.add('hidden');
+      wrap.innerHTML = '';
+      document.getElementById('dv-req-form').classList.remove('hidden');
+    });
+    document.getElementById('dv-preview-confirm').addEventListener('click', async () => {
+      const btn = document.getElementById('dv-preview-confirm');
+      const perr = document.getElementById('dv-preview-error');
+      perr.classList.add('hidden');
+      btn.disabled = true; btn.innerHTML = spinnerHtml();
+      try {
+        const requiresBatchingGuess = bankAccounts.find(b => b.id === bankAccountId)?.accountType === 'Cash';
+        await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: requiresBatchingGuess });
+        navigateTo('disbursement/vouchers');
+      } catch (err) {
+        console.error(err);
+        perr.textContent = 'Could not submit this voucher. Please try again.';
+        perr.classList.remove('hidden');
+        btn.disabled = false; btn.textContent = 'Confirm & Submit';
+      }
+    });
+  });
+}
+
+/* ---- Disbursement Voucher detail: print / approve / reject / cancel ---- */
+function dvDetailCardHtml(v) {
+  const linesHtml = (v.accountTitleBreakdown && v.accountTitleBreakdown.length)
+    ? v.accountTitleBreakdown.map(l => `<div class="flex justify-between text-sm py-1"><span>${escapeAttr(l.account)}</span><span>${formatCurrency(l.amount)}</span></div>`).join('')
+    : '';
+  return `
+    <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+      ${voucherStampHtml(v.status)}
+      <div class="text-center mb-6">
+        <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
+        <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher</h2>
+        <p class="text-sm text-muted mt-0.5">${v.number}</p>
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.payee)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Date Requested</p><p class="font-medium text-charcoal mt-0.5">${formatDate(v.dateRequested)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
+        <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
+        <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
+        ${v.approvedBy ? `<div><p class="text-xs text-muted uppercase">Approved By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.approvedBy)} · ${formatDate(v.dateApproved)}</p></div>` : ''}
+        ${v.rejectedBy ? `<div><p class="text-xs text-muted uppercase">Rejected By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.rejectedBy)} · ${formatDate(v.dateRejected)}</p></div>` : ''}
+        ${v.cancelledBy ? `<div><p class="text-xs text-muted uppercase">Cancelled By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.cancelledBy)} · ${formatDate(v.dateCancelled)}</p></div>` : ''}
+        ${v.datePaid ? `<div><p class="text-xs text-muted uppercase">Date Paid</p><p class="font-medium text-charcoal mt-0.5">${formatDate(v.datePaid)}</p></div>` : ''}
+        ${v.batchId ? `<div><p class="text-xs text-muted uppercase">Encashment Batch</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.batchNumber || v.batchId)}</p></div>` : ''}
+      </div>
+      ${linesHtml ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-2">Breakdown</p>${linesHtml}</div>` : ''}
+      <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
+        <div><p class="text-xs text-muted">Prepared By</p><p class="font-medium text-charcoal mt-6 border-t border-borderc pt-1">${escapeAttr(v.requestedBy)}</p></div>
+        <div><p class="text-xs text-muted">Approved By</p><p class="font-medium text-charcoal mt-6 border-t border-borderc pt-1">${escapeAttr(v.approvedBy) || ''}</p></div>
+      </div>
+    </div>`;
+}
+async function renderDisbursementVoucherDetailPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let v;
+  try {
+    v = await fetchFinanceDoc('disbursementVouchers', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!v) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Voucher not found.</p><a href="#/disbursement/vouchers" class="mt-4 text-sm text-forest hover:underline">Back to Disbursement Vouchers</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6 print:hidden">
+      <h1 class="text-xl font-semibold text-charcoal">${v.number}</h1>
+      <p class="text-sm text-muted mt-1">${v.type}</p>
+    </div>
+    ${dvDetailCardHtml(v)}
+    <div id="dv-detail-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 print:hidden"></div>
+    <div class="max-w-2xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden" id="dv-detail-actions"></div>`);
+  refreshIcons();
+
+  const actions = document.getElementById('dv-detail-actions');
+  const errBox = document.getElementById('dv-detail-error');
+  const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
+
+  if (v.status === 'Pending' && canApproveDisbursements()) {
+    buttons.push(`<button type="button" id="dv-approve-btn" class="text-sm font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-2">Approve</button>`);
+    buttons.push(`<button type="button" id="dv-reject-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Reject</button>`);
+  }
+  if (v.status === 'Pending') {
+    buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm text-muted hover:text-charcoal">Cancel Request</button>`);
+  }
+  buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
+  actions.innerHTML = buttons.join('');
+  refreshIcons();
+
+  const setBusy = (busy) => { actions.querySelectorAll('button').forEach(b => b.disabled = busy); };
+
+  document.getElementById('dv-approve-btn')?.addEventListener('click', async () => {
+    setBusy(true);
+    try {
+      const requiresBatching = await dvRequiresBatching(v);
+      if (requiresBatching) {
+        await updateFinanceDoc('disbursementVouchers', id, { status: 'Approved', approvedBy: currentUser.email, dateApproved: todayISO(), requiresBatching: true });
+      } else {
+        const datePaid = todayISO();
+        await executeDisbursementVoucher({ ...v, id, datePaid });
+        await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, requiresBatching: false });
+      }
+      renderDisbursementVoucherDetailPage(id);
+    } catch (e) {
+      console.error(e);
+      errBox.textContent = 'Could not approve this voucher. Please try again.';
+      errBox.classList.remove('hidden');
+      setBusy(false);
+    }
+  });
+  document.getElementById('dv-reject-btn')?.addEventListener('click', async () => {
+    setBusy(true);
+    try {
+      await updateFinanceDoc('disbursementVouchers', id, { status: 'Rejected', rejectedBy: currentUser.email, dateRejected: todayISO() });
+      renderDisbursementVoucherDetailPage(id);
+    } catch (e) {
+      console.error(e);
+      errBox.textContent = 'Could not reject this voucher. Please try again.';
+      errBox.classList.remove('hidden');
+      setBusy(false);
+    }
+  });
+  document.getElementById('dv-cancel-btn')?.addEventListener('click', async () => {
+    setBusy(true);
+    try {
+      await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO() });
+      renderDisbursementVoucherDetailPage(id);
+    } catch (e) {
+      console.error(e);
+      errBox.textContent = 'Could not cancel this voucher. Please try again.';
+      errBox.classList.remove('hidden');
+      setBusy(false);
+    }
+  });
+}
+
+/* ---- Encashment Batch ---- */
+async function renderEncashmentBatchPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Encashment Batch</h1>
+      <p class="text-sm text-muted mt-1">Approved vouchers awaiting a cash withdrawal. Select the ones being encashed together, then process the batch.</p>
+    </div>
+    <div id="batch-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const all = await fetchFinanceCollection('disbursementVouchers');
+    const pending = all.filter(v => v.status === 'Approved');
+    if (!pending.length) {
+      document.getElementById('batch-list-container').innerHTML = `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">Nothing waiting for encashment right now.</div>`;
+      return;
+    }
+    document.getElementById('batch-list-container').innerHTML = `
+      <form id="batch-form" class="space-y-4">
+        <div id="batch-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+        <div class="card overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+              <th class="px-4 py-3"><input type="checkbox" id="batch-select-all" /></th>
+              <th class="px-4 py-3">DV #</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Source</th><th class="px-4 py-3 text-right">Amount</th>
+            </tr></thead>
+            <tbody>
+              ${pending.map(v => `
+                <tr class="border-b border-borderc last:border-0">
+                  <td class="px-4 py-3"><input type="checkbox" class="batch-item" value="${v.id}" data-amount="${v.amount}" /></td>
+                  <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
+                  <td class="px-4 py-3">${v.type}</td>
+                  <td class="px-4 py-3">${v.payee || '—'}</td>
+                  <td class="px-4 py-3">${v.bankAccountName || '—'}</td>
+                  <td class="px-4 py-3 text-right">${formatCurrency(v.amount)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="card p-5 max-w-md">
+          <p class="text-sm text-charcoal">Selected total: <span id="batch-total" class="font-semibold text-forest">₱ 0.00</span> (<span id="batch-count">0</span> voucher(s))</p>
+          <div class="mt-3">
+            ${dateField('batchDate', 'Encashment Date', { required: true, value: todayISO() })}
+          </div>
+          <button type="submit" id="batch-submit" class="btn-primary text-sm mt-4"><span id="batch-submit-text">Process Batch</span></button>
+        </div>
+      </form>`;
+    refreshIcons();
+
+    const checkboxes = () => Array.from(document.querySelectorAll('.batch-item'));
+    const updateTotals = () => {
+      const checked = checkboxes().filter(c => c.checked);
+      const total = checked.reduce((s, c) => s + Number(c.getAttribute('data-amount') || 0), 0);
+      document.getElementById('batch-total').textContent = formatCurrency(total);
+      document.getElementById('batch-count').textContent = checked.length;
+    };
+    document.getElementById('batch-select-all').addEventListener('change', (e) => {
+      checkboxes().forEach(c => { c.checked = e.target.checked; });
+      updateTotals();
+    });
+    checkboxes().forEach(c => c.addEventListener('change', updateTotals));
+
+    document.getElementById('batch-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('batch-submit');
+      const btnText = document.getElementById('batch-submit-text');
+      const errBox = document.getElementById('batch-form-error');
+      errBox.classList.add('hidden');
+      const selectedIds = checkboxes().filter(c => c.checked).map(c => c.value);
+      const batchDate = document.getElementById('field-batchDate').value;
+
+      if (!selectedIds.length) {
+        errBox.textContent = 'Select at least one voucher to encash.';
+        errBox.classList.remove('hidden');
+        return;
+      }
+      if (!batchDate) {
+        errBox.textContent = 'Enter the encashment date.';
+        errBox.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true; btnText.innerHTML = spinnerHtml();
+      try {
+        const selectedVouchers = pending.filter(v => selectedIds.includes(v.id));
+        const totalAmount = selectedVouchers.reduce((s, v) => s + (Number(v.amount) || 0), 0);
+        const batchNumber = await generateSeriesNumber('encashmentBatches', 'ENC', 'number');
+        const batchRef = await createFinanceDoc('encashmentBatches', {
+          number: batchNumber, batchDate,
+          voucherRefs: selectedVouchers.map(v => ({ id: v.id, type: v.type, number: v.number, amount: v.amount, accountTitleBreakdown: v.accountTitleBreakdown || [{ account: v.accountTitle, amount: v.amount }] })),
+          totalAmount, processedBy: currentUser.email, status: 'Processed',
+        });
+        for (const v of selectedVouchers) {
+          await executeDisbursementVoucher({ ...v, datePaid: batchDate, batchId: batchRef.id });
+          await updateFinanceDoc('disbursementVouchers', v.id, { status: 'Paid', datePaid: batchDate, batchId: batchRef.id, batchNumber });
+        }
+        navigateTo('disbursement/encashment-summary');
+      } catch (err) {
+        console.error(err);
+        errBox.textContent = 'Could not process this batch. Please try again.';
+        errBox.classList.remove('hidden');
+        btn.disabled = false; btnText.textContent = 'Process Batch';
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    document.getElementById('batch-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ---- Petty Cash ---- */
+async function computePettyCashOnHand(fund) {
+  const pcvs = await fetchFinanceCollection('pettyCashVouchers');
+  const unreplenished = pcvs.filter(p => p.fundId === fund.id && p.status === 'Paid' && !p.replenished);
+  const spent = unreplenished.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return { cashOnHand: Number((fund.openingBalance - spent).toFixed(2)), unreplenished };
+}
+async function renderPettyCashPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Petty Cash</h1>
+        <p class="text-sm text-muted mt-1">Cash funds kept on hand. Individual spends are logged directly; replenishment goes through a Disbursement Voucher.</p>
+      </div>
+      <a href="#/cash-management/bank-accounts/new" class="btn-primary text-sm">+ New Cash Fund</a>
+    </div>
+    <div id="petty-cash-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const allAccounts = await fetchFinanceCollection('bankAccounts');
+    const funds = allAccounts.filter(a => a.accountType === 'Cash');
+    if (!funds.length) {
+      document.getElementById('petty-cash-container').innerHTML = `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+        <p class="text-sm text-charcoal font-medium">No Cash Funds yet.</p>
+        <p class="text-sm text-muted mt-1">Create a Bank Account with type "Cash" to represent a petty cash box or cash-on-hand fund.</p>
+        <a href="#/cash-management/bank-accounts/new" class="mt-4 btn-primary text-sm">+ New Cash Fund</a>
+      </div>`;
+      return;
+    }
+    const rows = await Promise.all(funds.map(async (f) => {
+      const { cashOnHand, unreplenished } = await computePettyCashOnHand(f);
+      return { fund: f, cashOnHand, unreplenishedCount: unreplenished.length };
+    }));
+    document.getElementById('petty-cash-container').innerHTML = `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Fund</th><th class="px-4 py-3">Face Value</th><th class="px-4 py-3">Cash on Hand</th><th class="px-4 py-3">Unreplenished</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${r.fund.nickname}</td>
+                <td class="px-4 py-3">${formatCurrency(r.fund.openingBalance)}</td>
+                <td class="px-4 py-3 font-medium ${r.cashOnHand < r.fund.openingBalance * 0.2 ? 'text-red-600' : 'text-charcoal'}">${formatCurrency(r.cashOnHand)}</td>
+                <td class="px-4 py-3">${r.unreplenishedCount}</td>
+                <td class="px-4 py-3 text-right space-x-3">
+                  <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">New Voucher</a>
+                  <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">Vouchers</a>
+                  ${r.unreplenishedCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">Replenish</a>` : ''}
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('petty-cash-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewPettyCashVoucherPage(fundId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let fund;
+  try {
+    fund = await fetchFinanceDoc('bankAccounts', fundId);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!fund) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Petty Cash Voucher</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)} — no approval needed, stamped Paid immediately.</p>
+    </div>
+    <form id="pcv-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="pcv-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('pcvDate', 'Date', { required: true, value: todayISO() })}
+        ${selectField('pcvCategory', 'Category', EXPENSE_ACCOUNTS, { required: true })}
+        ${numberField('pcvAmount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${textField('pcvRequestedBy', 'Requested By', { value: currentUser ? currentUser.email : '' })}
+        ${textareaField('pcvPurpose', 'Purpose', { span2: true, required: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="pcv-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/disbursement/petty-cash" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="pcv-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+
+  document.getElementById('pcv-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('pcv-form-error');
+    errBox.classList.add('hidden');
+    const date = document.getElementById('field-pcvDate').value;
+    const category = document.getElementById('field-pcvCategory').value;
+    const amount = Number(document.getElementById('field-pcvAmount').value) || 0;
+    const requestedBy = document.getElementById('field-pcvRequestedBy').value.trim();
+    const purpose = document.getElementById('field-pcvPurpose').value.trim();
+
+    if (!date || !category || !amount || !purpose) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    const previewNumber = await generateSeriesNumber('pettyCashVouchers', 'PCV', 'number');
+    const draft = { number: previewNumber, fundId, fundName: fund.nickname, date, category, amount, requestedBy, purpose };
+
+    document.getElementById('pcv-form').classList.add('hidden');
+    const wrap = document.getElementById('pcv-preview-wrap');
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+        ${voucherStampHtml('Paid')}
+        <div class="text-center mb-6">
+          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
+          <h2 class="text-lg font-semibold text-charcoal mt-1">Petty Cash Voucher</h2>
+          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.fundName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.date)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Category</p><p class="font-medium text-charcoal mt-0.5">${draft.category}</p></div>
+          <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
+        </div>
+      </div>
+      <div id="pcv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
+        <button type="button" id="pcv-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
+        <button type="button" id="pcv-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
+      </div>`;
+    refreshIcons();
+
+    document.getElementById('pcv-preview-back').addEventListener('click', () => {
+      wrap.classList.add('hidden');
+      wrap.innerHTML = '';
+      document.getElementById('pcv-form').classList.remove('hidden');
+    });
+    document.getElementById('pcv-preview-confirm').addEventListener('click', async () => {
+      const btn = document.getElementById('pcv-preview-confirm');
+      const perr = document.getElementById('pcv-preview-error');
+      perr.classList.add('hidden');
+      btn.disabled = true; btn.innerHTML = spinnerHtml();
+      try {
+        await createFinanceDoc('pettyCashVouchers', { ...draft, status: 'Paid', replenished: false });
+        navigateTo('disbursement/petty-cash');
+      } catch (err) {
+        console.error(err);
+        perr.textContent = 'Could not save this voucher. Please try again.';
+        perr.classList.remove('hidden');
+        btn.disabled = false; btn.textContent = 'Confirm & Submit';
+      }
+    });
+  });
+}
+async function renderPettyCashVouchersListPage(fundId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let fund;
+  try {
+    fund = await fetchFinanceDoc('bankAccounts', fundId);
+  } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!fund) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
+
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Petty Cash Vouchers</h1>
+        <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)}</p>
+      </div>
+      <a href="#/disbursement/petty-cash/new-voucher/${fundId}" class="btn-primary text-sm">+ New Voucher</a>
+    </div>
+    <div id="pcv-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const all = await fetchFinanceCollection('pettyCashVouchers');
+    const vouchers = all.filter(p => p.fundId === fundId);
+    document.getElementById('pcv-list-container').innerHTML = vouchers.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Replenished</th><th class="px-4 py-3">Status</th>
+          </tr></thead>
+          <tbody>
+            ${vouchers.map(v => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
+                <td class="px-4 py-3">${formatDate(v.date)}</td>
+                <td class="px-4 py-3">${v.category}</td>
+                <td class="px-4 py-3">${v.purpose || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
+                <td class="px-4 py-3">${v.replenished ? `${icon('check-circle', 'w-4 h-4 text-forest inline')}` : '—'}</td>
+                <td class="px-4 py-3">${statusBadge(v.status)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No vouchers logged yet for this fund.</div>`;
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('pcv-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewReplenishmentPage(fundId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let fund, unreplenished = [], realBankAccounts = [];
+  try {
+    const [fundData, all, banks] = await Promise.all([fetchFinanceDoc('bankAccounts', fundId), fetchFinanceCollection('pettyCashVouchers'), fetchActiveBankAccounts()]);
+    fund = fundData;
+    unreplenished = all.filter(p => p.fundId === fundId && p.status === 'Paid' && !p.replenished);
+    realBankAccounts = banks.filter(b => b.accountType !== 'Cash');
+  } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!fund) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
+  if (!unreplenished.length) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Nothing to replenish.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
+
+  const breakdown = {};
+  unreplenished.forEach(p => { breakdown[p.category] = (breakdown[p.category] || 0) + (Number(p.amount) || 0); });
+  const breakdownArr = Object.entries(breakdown).map(([account, amount]) => ({ account, amount: Number(amount.toFixed(2)) }));
+  const total = breakdownArr.reduce((s, b) => s + b.amount, 0);
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Request Replenishment</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)} — ${unreplenished.length} unreplenished voucher(s)</p>
+    </div>
+    <div class="card p-5 mb-6 max-w-2xl">
+      <p class="text-xs text-muted uppercase mb-2">Breakdown</p>
+      ${breakdownArr.map(b => `<div class="flex justify-between text-sm py-1"><span>${b.account}</span><span>${formatCurrency(b.amount)}</span></div>`).join('')}
+      <div class="flex justify-between text-sm py-1 mt-2 border-t border-borderc font-semibold"><span>Total</span><span>${formatCurrency(total)}</span></div>
+    </div>
+    <form id="repl-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="repl-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('replDate', 'Date Requested', { required: true, value: todayISO() })}
+        ${bankAccountSelectHtml(realBankAccounts, null, { required: true })}
+      </div>
+      <p class="text-xs text-muted">This always goes through Encashment Batching — withdraw from a real bank/checking account, not another Cash Fund.</p>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="repl-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/disbursement/petty-cash" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="repl-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+
+  document.getElementById('repl-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('repl-form-error');
+    errBox.classList.add('hidden');
+    const date = document.getElementById('field-replDate').value;
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel.value;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!date || !bankAccountId) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
+    const draft = {
+      number: previewNumber, type: 'Petty Cash Replenishment', payee: fund.nickname, amount: total,
+      purpose: `Petty cash replenishment — ${fund.nickname}`, modeOfPayment: 'Cheque', bankAccountId, bankAccountName,
+      accountTitle: breakdownArr.map(b => b.account).join(', '), accountTitleBreakdown: breakdownArr,
+      pcvIds: unreplenished.map(p => p.id), requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
+    };
+
+    document.getElementById('repl-form').classList.add('hidden');
+    const wrap = document.getElementById('repl-preview-wrap');
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+        ${voucherStampHtml('Pending')}
+        <div class="text-center mb-6">
+          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
+          <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher — Petty Cash Replenishment</h2>
+          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.dateRequested)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Withdraw From</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+        </div>
+        <div class="mt-4 pt-4 border-t border-borderc">
+          <p class="text-xs text-muted uppercase mb-2">Breakdown</p>
+          ${breakdownArr.map(b => `<div class="flex justify-between text-sm py-1"><span>${b.account}</span><span>${formatCurrency(b.amount)}</span></div>`).join('')}
+        </div>
+      </div>
+      <div id="repl-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
+        <button type="button" id="repl-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
+        <button type="button" id="repl-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
+      </div>`;
+    refreshIcons();
+
+    document.getElementById('repl-preview-back').addEventListener('click', () => {
+      wrap.classList.add('hidden');
+      wrap.innerHTML = '';
+      document.getElementById('repl-form').classList.remove('hidden');
+    });
+    document.getElementById('repl-preview-confirm').addEventListener('click', async () => {
+      const btn = document.getElementById('repl-preview-confirm');
+      const perr = document.getElementById('repl-preview-error');
+      perr.classList.add('hidden');
+      btn.disabled = true; btn.innerHTML = spinnerHtml();
+      try {
+        await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: true });
+        navigateTo('disbursement/vouchers');
+      } catch (err) {
+        console.error(err);
+        perr.textContent = 'Could not submit this replenishment. Please try again.';
+        perr.classList.remove('hidden');
+        btn.disabled = false; btn.textContent = 'Confirm & Submit';
+      }
+    });
+  });
+}
+
+/* ---- Cash Advances ---- */
+function caAgingBadge(ca) {
+  if (ca.status !== 'Outstanding' || !ca.dateReleased) return '';
+  const days = Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000);
+  if (days > CA_AGING_DAYS) {
+    return `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-red-50 text-red-600 border-red-200">${days}d overdue</span>`;
+  }
+  return '';
+}
+async function renderCashAdvancesPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Cash Advances</h1>
+        <p class="text-sm text-muted mt-1">Employee cash advances. Outstanding advances past ${CA_AGING_DAYS} days unliquidated are flagged.</p>
+      </div>
+      <a href="#/disbursement/cash-advances/new" class="btn-primary text-sm">+ New Cash Advance</a>
+    </div>
+    <div id="ca-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const advances = await fetchFinanceCollection('cashAdvances');
+    document.getElementById('ca-list-container').innerHTML = advances.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">CA #</th><th class="px-4 py-3">Employee</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Released</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${advances.map(a => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${a.number}</td>
+                <td class="px-4 py-3">${a.employeeName || '—'}</td>
+                <td class="px-4 py-3">${a.purpose || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(a.amount)}</td>
+                <td class="px-4 py-3">${formatDate(a.dateReleased)}</td>
+                <td class="px-4 py-3">${statusBadge(a.status)}${caAgingBadge(a)}</td>
+                <td class="px-4 py-3 text-right">
+                  <a href="#/disbursement/cash-advances/view/${a.id}" class="text-forest hover:underline text-xs font-medium">View</a>
+                  ${a.status === 'Outstanding' ? ` · <a href="#/disbursement/cash-advances/liquidate/${a.id}" class="text-forest hover:underline text-xs font-medium">Liquidate</a>` : ''}
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No cash advances recorded yet.</div>`;
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('ca-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewCashAdvancePage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let bankAccounts = [];
+  try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Cash Advance</h1>
+      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Always goes through Encashment Batching once approved.</p>
+    </div>
+    <form id="ca-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="ca-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('caEmployeeName', 'Employee Name', { required: true })}
+        ${numberField('caAmount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('caDate', 'Date Requested', { required: true, value: todayISO() })}
+        ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
+        ${textareaField('caPurpose', 'Purpose', { span2: true, required: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="ca-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="ca-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+
+  document.getElementById('ca-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('ca-form-error');
+    errBox.classList.add('hidden');
+    const employeeName = document.getElementById('field-caEmployeeName').value.trim();
+    const amount = Number(document.getElementById('field-caAmount').value) || 0;
+    const date = document.getElementById('field-caDate').value;
+    const purpose = document.getElementById('field-caPurpose').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel.value;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!employeeName || !amount || !date || !purpose || !bankAccountId) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
+    const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
+    const draft = { caNumber, dvNumber, employeeName, amount, date, purpose, bankAccountId, bankAccountName };
+
+    document.getElementById('ca-form').classList.add('hidden');
+    const wrap = document.getElementById('ca-preview-wrap');
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+        ${voucherStampHtml('Pending')}
+        <div class="text-center mb-6">
+          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
+          <h2 class="text-lg font-semibold text-charcoal mt-1">Cash Advance Request</h2>
+          <p class="text-sm text-muted mt-0.5">${draft.caNumber} · DV ${draft.dvNumber}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div><p class="text-xs text-muted uppercase">Employee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.date)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
+          <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
+          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
+        </div>
+      </div>
+      <div id="ca-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
+        <button type="button" id="ca-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
+        <button type="button" id="ca-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
+      </div>`;
+    refreshIcons();
+
+    document.getElementById('ca-preview-back').addEventListener('click', () => {
+      wrap.classList.add('hidden');
+      wrap.innerHTML = '';
+      document.getElementById('ca-form').classList.remove('hidden');
+    });
+    document.getElementById('ca-preview-confirm').addEventListener('click', async () => {
+      const btn = document.getElementById('ca-preview-confirm');
+      const perr = document.getElementById('ca-preview-error');
+      perr.classList.add('hidden');
+      btn.disabled = true; btn.innerHTML = spinnerHtml();
+      try {
+        const caRef = await createFinanceDoc('cashAdvances', {
+          number: draft.caNumber, employeeName: draft.employeeName, purpose: draft.purpose,
+          amount: draft.amount, dateRequested: draft.date, status: 'Pending Approval',
+        });
+        await createFinanceDoc('disbursementVouchers', {
+          number: draft.dvNumber, type: 'Cash Advance Release', payee: draft.employeeName, amount: draft.amount,
+          purpose: draft.purpose, modeOfPayment: 'Cash', bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
+          accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
+          requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
+          status: 'Pending', requiresBatching: true,
+        });
+        navigateTo('disbursement/cash-advances');
+      } catch (err) {
+        console.error(err);
+        perr.textContent = 'Could not submit this request. Please try again.';
+        perr.classList.remove('hidden');
+        btn.disabled = false; btn.textContent = 'Confirm & Submit';
+      }
+    });
+  });
+}
+async function renderCashAdvanceDetailPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let ca;
+  try { ca = await fetchFinanceDoc('cashAdvances', id); } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!ca) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Cash advance not found.</p><a href="#/disbursement/cash-advances" class="mt-4 text-sm text-forest hover:underline">Back to Cash Advances</a></div>`); return; }
+
+  const liq = ca.liquidation;
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">${ca.number}</h1>
+        <p class="text-sm text-muted mt-1">${escapeAttr(ca.employeeName)} — ${escapeAttr(ca.purpose)}</p>
+      </div>
+      ${statusBadge(ca.status)}
+    </div>
+    <div class="card p-6 max-w-2xl space-y-4">
+      <div class="grid grid-cols-2 gap-4 text-sm">
+        <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(ca.amount)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Date Released</p><p class="font-medium text-charcoal mt-0.5">${formatDate(ca.dateReleased)}</p></div>
+      </div>
+      ${liq ? `
+        <div class="border-t border-borderc pt-4">
+          <p class="text-xs text-muted uppercase mb-2">Liquidation (${formatDate(liq.dateLiquidated)})</p>
+          ${liq.items.map(i => `<div class="flex justify-between text-sm py-1"><span>${escapeAttr(i.category)}${i.description ? ' — ' + escapeAttr(i.description) : ''}</span><span>${formatCurrency(i.amount)}</span></div>`).join('')}
+          <div class="flex justify-between text-sm py-1 mt-2 border-t border-borderc font-semibold"><span>Total Liquidated</span><span>${formatCurrency(liq.totalLiquidated)}</span></div>
+          ${liq.excess > 0 ? `<p class="text-xs text-forest mt-1">₱${liq.excess.toFixed(2)} returned by employee.</p>` : ''}
+          ${liq.shortfall > 0 ? `<p class="text-xs text-orange-600 mt-1">₱${liq.shortfall.toFixed(2)} owed to employee (reimbursement created in Accounts Payable).</p>` : ''}
+        </div>` : ''}
+    </div>
+    <div class="max-w-2xl mt-4 flex gap-3">
+      ${ca.status === 'Outstanding' ? `<a href="#/disbursement/cash-advances/liquidate/${ca.id}" class="btn-primary text-sm">Liquidate</a>` : ''}
+      <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Back to list</a>
+    </div>`);
+  refreshIcons();
+}
+async function renderCashAdvanceLiquidationPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let ca;
+  try { ca = await fetchFinanceDoc('cashAdvances', id); } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!ca) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Cash advance not found.</p><a href="#/disbursement/cash-advances" class="mt-4 text-sm text-forest hover:underline">Back to Cash Advances</a></div>`); return; }
+  if (ca.status !== 'Outstanding') { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">This advance is not outstanding.</p><a href="#/disbursement/cash-advances" class="mt-4 text-sm text-forest hover:underline">Back to Cash Advances</a></div>`); return; }
+
+  let bankAccounts = [];
+  try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Liquidate Cash Advance</h1>
+      <p class="text-sm text-muted mt-1">${ca.number} — ${escapeAttr(ca.employeeName)} · Advanced ${formatCurrency(ca.amount)}</p>
+    </div>
+    <form id="liq-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="liq-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      ${dateField('liqDate', 'Liquidation Date', { required: true, value: todayISO() })}
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <label class="block text-sm font-medium text-charcoal">Itemized Expenses</label>
+          <button type="button" id="liq-add-line" class="text-xs font-medium text-forest hover:underline">+ Add Line</button>
+        </div>
+        <div id="liq-lines" class="space-y-2"></div>
+        <div class="flex items-center justify-between mt-3 text-sm border-t border-borderc pt-3">
+          <span class="text-muted">Advanced: <span class="font-medium text-charcoal">${formatCurrency(ca.amount)}</span></span>
+          <span class="text-muted">Total Itemized: <span id="liq-total" class="font-medium text-charcoal">₱ 0.00</span></span>
+          <span class="text-muted">Difference: <span id="liq-diff" class="font-medium text-charcoal">₱ 0.00</span></span>
+        </div>
+      </div>
+      <div id="liq-return-wrap">
+        ${bankAccountSelectHtml(bankAccounts, null, {})}
+        <p class="text-xs text-muted mt-1.5">Account that receives any cash the employee returns (only used if itemized total is less than the advance).</p>
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="liq-submit" type="submit" class="btn-primary"><span id="liq-submit-text">Save Liquidation</span></button>
+        <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  function addLiqLine() {
+    const container = document.getElementById('liq-lines');
+    const row = document.createElement('div');
+    row.className = 'grid grid-cols-12 gap-2 items-center';
+    row.setAttribute('data-liq-row', '1');
+    row.innerHTML = `
+      <div class="col-span-4">
+        <select class="liq-category w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+          <option value="">Select account...</option>
+          ${EXPENSE_ACCOUNTS.map(a => `<option value="${a}">${a}</option>`).join('')}
+        </select>
+      </div>
+      <div class="col-span-5">
+        <input type="text" placeholder="Description" class="liq-desc w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      </div>
+      <div class="col-span-2">
+        <input type="number" step="0.01" min="0" placeholder="Amount" class="liq-amount w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      </div>
+      <div class="col-span-1 text-right">
+        <button type="button" class="liq-remove text-muted hover:text-red-600" title="Remove">${icon('x', 'w-4 h-4')}</button>
+      </div>`;
+    container.appendChild(row);
+    refreshIcons();
+    row.querySelector('.liq-amount').addEventListener('input', updateLiqTotals);
+    row.querySelector('.liq-remove').addEventListener('click', () => { row.remove(); updateLiqTotals(); });
+  }
+  function updateLiqTotals() {
+    let total = 0;
+    document.querySelectorAll('#liq-lines [data-liq-row]').forEach(row => { total += Number(row.querySelector('.liq-amount').value) || 0; });
+    document.getElementById('liq-total').textContent = formatCurrency(total);
+    const diff = Number((ca.amount - total).toFixed(2));
+    const diffEl = document.getElementById('liq-diff');
+    diffEl.textContent = (diff >= 0 ? '' : '-') + formatCurrency(Math.abs(diff));
+    diffEl.className = diff > 0 ? 'font-medium text-forest' : (diff < 0 ? 'font-medium text-orange-600' : 'font-medium text-charcoal');
+  }
+  addLiqLine(); addLiqLine();
+  document.getElementById('liq-add-line').addEventListener('click', addLiqLine);
+
+  document.getElementById('liq-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('liq-submit');
+    const btnText = document.getElementById('liq-submit-text');
+    const errBox = document.getElementById('liq-form-error');
+    errBox.classList.add('hidden');
+
+    const liqDate = document.getElementById('field-liqDate').value;
+    const items = [];
+    document.querySelectorAll('#liq-lines [data-liq-row]').forEach(row => {
+      const category = row.querySelector('.liq-category').value;
+      const description = row.querySelector('.liq-desc').value.trim();
+      const amount = Number(row.querySelector('.liq-amount').value) || 0;
+      if (category && amount) items.push({ category, description, amount });
+    });
+    const totalLiquidated = Number(items.reduce((s, i) => s + i.amount, 0).toFixed(2));
+    const excess = Math.max(0, Number((ca.amount - totalLiquidated).toFixed(2)));
+    const shortfall = Math.max(0, Number((totalLiquidated - ca.amount).toFixed(2)));
+
+    if (!liqDate || !items.length) {
+      errBox.textContent = 'Enter the liquidation date and at least one itemized expense.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    const bankSel = document.getElementById('field-bankAccountId');
+    const returnAccountId = bankSel ? bankSel.value : '';
+    const returnAccountName = bankSel && returnAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+    if (excess > 0 && !returnAccountId) {
+      errBox.textContent = 'Select which account receives the returned cash.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const glLines = items.map(i => ({
+        date: liqDate, account: i.category, debit: i.amount, credit: 0,
+        description: `Cash advance liquidation — ${ca.number} (${i.description || i.category})`, sourceType: 'cash-advance-liquidation', sourceId: id,
+      }));
+      glLines.push({ date: liqDate, account: 'Advances to Employees', debit: 0, credit: ca.amount, description: `Cash advance liquidation — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id });
+
+      let shortfallAPId = null;
+      if (excess > 0) {
+        glLines.push({ date: liqDate, account: returnAccountName, debit: excess, credit: 0, description: `Cash advance excess returned — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id, bankAccountId: returnAccountId });
+      } else if (shortfall > 0) {
+        const apRef = await createFinanceDoc('accountsPayable', {
+          source: 'cash-advance-shortfall', payee: ca.employeeName, category: 'Advances to Employees',
+          amount: shortfall, amountPaid: 0, balance: shortfall, status: 'Unpaid', payments: [],
+          dateReceived: liqDate, dueDate: '', description: `Cash advance shortfall reimbursement — ${ca.number}`,
+        });
+        shortfallAPId = apRef.id;
+        glLines.push({ date: liqDate, account: 'Accounts Payable', debit: 0, credit: shortfall, description: `Cash advance shortfall — ${ca.number}`, sourceType: 'ap-payment', sourceId: apRef.id });
+      }
+      await postGLEntries(glLines);
+
+      await updateFinanceDoc('cashAdvances', id, {
+        status: 'Liquidated',
+        liquidation: { dateLiquidated: liqDate, items, totalLiquidated, excess, shortfall, returnedToAccountId: returnAccountId || null, returnedToAccountName: returnAccountName || null, shortfallAPId },
+      });
+      navigateTo('disbursement/cash-advances');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this liquidation. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Liquidation';
+    }
+  });
+}
+
+/* ---- Encashment Summary ---- */
+async function renderEncashmentSummaryPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Encashment Summary</h1>
+      <p class="text-sm text-muted mt-1">Every processed encashment batch — replenishments, cash advance releases, and cash-fund payments.</p>
+    </div>
+    <div id="enc-summary-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const batches = await fetchFinanceCollection('encashmentBatches');
+    if (!batches.length) {
+      document.getElementById('enc-summary-container').innerHTML = `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No batches processed yet.</div>`;
+      return;
+    }
+    const grandTotal = batches.reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
+    document.getElementById('enc-summary-container').innerHTML = `
+      <p class="text-sm text-muted mb-3">Showing ${batches.length} batch(es) · Total encashed: <span class="font-medium text-charcoal">${formatCurrency(grandTotal)}</span></p>
+      <div class="space-y-3">
+        ${batches.map(b => `
+          <div class="card p-4">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-sm font-medium text-charcoal">${b.number}</p>
+              <p class="text-xs text-muted">${formatDate(b.batchDate)} · ${formatCurrency(b.totalAmount)}</p>
+            </div>
+            <table class="w-full text-xs">
+              <tbody>
+                ${(b.voucherRefs || []).map(v => `
+                  <tr class="border-t border-borderc">
+                    <td class="py-1.5 text-charcoal">${v.number} — ${v.type}</td>
+                    <td class="py-1.5 text-right w-28">${formatCurrency(v.amount)}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`).join('')}
+      </div>`;
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('enc-summary-container').innerHTML = poLoadErrorHtml();
   }
 }
 
