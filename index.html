@@ -758,6 +758,22 @@ function renderRoute() {
     renderAPPaymentPage(apId);
     return;
   }
+  if (path.startsWith('finance/expenses/pay/')) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const expId = path.substring('finance/expenses/pay/'.length);
+    setActiveNav('finance/expenses', NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Mark Paid' });
+    renderExpensePaymentPage(expId);
+    return;
+  }
+  if (path.startsWith('finance/tax/pay/')) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const taxId = path.substring('finance/tax/pay/'.length);
+    setActiveNav('finance/tax', NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Mark Paid' });
+    renderTaxPaymentPage(taxId);
+    return;
+  }
 
   // Dynamic Procurement routes (not in NAV — reached via buttons/links on the Procurement pages)
   const procurementEditRoutes = [
@@ -794,6 +810,38 @@ function renderRoute() {
     setActiveNav('procurement/supplier-bills', NAV.find(n => n.path === 'procurement'));
     buildBreadcrumb(NAV.find(n => n.path === 'procurement'), { name: 'New Supplier Bill' });
     renderNewSupplierBillPage(prefillPOId);
+    return;
+  }
+
+  // Dynamic Cash Management routes (not in NAV — reached via buttons/links on the Cash Management pages)
+  if (path.startsWith('cash-management/bank-accounts/edit/')) {
+    if (!canAccess('cash-management')) { renderNoAccess('Cash Management'); buildBreadcrumb(null, null); return; }
+    const bankId = path.substring('cash-management/bank-accounts/edit/'.length);
+    setActiveNav('cash-management/bank-accounts', NAV.find(n => n.path === 'cash-management'));
+    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'Edit Bank Account' });
+    renderEditBankAccountPage(bankId);
+    return;
+  }
+  if (path === 'cash-management/bank-accounts/new') {
+    if (!canAccess('cash-management')) { renderNoAccess('Cash Management'); buildBreadcrumb(null, null); return; }
+    setActiveNav('cash-management/bank-accounts', NAV.find(n => n.path === 'cash-management'));
+    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'New Bank Account' });
+    renderNewBankAccountPage();
+    return;
+  }
+  if (path === 'cash-management/cash-position/new') {
+    if (!canAccess('cash-management')) { renderNoAccess('Cash Management'); buildBreadcrumb(null, null); return; }
+    setActiveNav('cash-management/cash-position', NAV.find(n => n.path === 'cash-management'));
+    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'Record Transaction' });
+    renderNewCashTransactionPage();
+    return;
+  }
+  if (path.startsWith('cash-management/bank-reconciliation/new/')) {
+    if (!canAccess('cash-management')) { renderNoAccess('Cash Management'); buildBreadcrumb(null, null); return; }
+    const bankId = path.substring('cash-management/bank-reconciliation/new/'.length);
+    setActiveNav('cash-management/bank-reconciliation', NAV.find(n => n.path === 'cash-management'));
+    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'New Reconciliation' });
+    renderNewReconciliationPage(bankId);
     return;
   }
 
@@ -860,6 +908,18 @@ function renderRoute() {
   };
   if (procurementPages[path]) {
     procurementPages[path]();
+    return;
+  }
+
+  // Cash Management module — real pages instead of placeholders
+  const cashManagementPages = {
+    'cash-management/bank-accounts': renderBankAccountsPage,
+    'cash-management/cash-position': renderCashPositionPage,
+    'cash-management/bank-reconciliation': renderBankReconciliationPage,
+    'cash-management/cash-forecast': renderCashForecastPage,
+  };
+  if (cashManagementPages[path]) {
+    cashManagementPages[path]();
     return;
   }
 
@@ -2109,8 +2169,10 @@ const ACCOUNTS_CHART = [
   'Utilities Expense', 'Rent Expense', 'Salaries Expense', 'Supplies Expense',
   'Transportation Expense', 'Professional Fees Expense', 'Repairs & Maintenance Expense',
   'Taxes & Licenses Expense', 'Miscellaneous Expense',
+  "Owner's Capital", "Owner's Drawings", 'Other Income',
 ];
 const EXPENSE_ACCOUNTS = ACCOUNTS_CHART.filter(a => a.endsWith('Expense'));
+const CASH_OFFSET_ACCOUNTS = ["Owner's Capital", "Owner's Drawings", 'Other Income', 'Sales Revenue', ...EXPENSE_ACCOUNTS, 'Accounts Receivable', 'Accounts Payable'];
 const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
 
@@ -2341,9 +2403,9 @@ async function renderNewAREntryPage() {
 }
 async function renderARPaymentPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let ar;
+  let ar, bankAccounts = [];
   try {
-    ar = await fetchFinanceDoc('accountsReceivable', id);
+    [ar, bankAccounts] = await Promise.all([fetchFinanceDoc('accountsReceivable', id), fetchActiveBankAccounts()]);
   } catch (e) {
     console.error(e);
     contentWrap(poLoadErrorHtml());
@@ -2372,6 +2434,7 @@ async function renderARPaymentPage(id) {
         ${numberField('payAmount', 'Payment Amount (₱)', { required: true, step: '0.01', value: ar.balance })}
         ${dateField('payDate', 'Payment Date', { required: true, value: todayISO() })}
         ${selectField('payMethod', 'Payment Method', PAYMENT_METHODS, { required: true, value: 'Cash' })}
+        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
         ${textField('payNotes', 'Notes / Reference')}
       </div>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
@@ -2391,9 +2454,17 @@ async function renderARPaymentPage(id) {
     const payDate = document.getElementById('field-payDate').value;
     const payMethod = document.getElementById('field-payMethod').value;
     const payNotes = document.getElementById('field-payNotes').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel ? bankSel.value : '';
+    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
 
     if (!payAmount || payAmount <= 0 || !payDate) {
       errBox.textContent = 'Enter a valid payment amount and date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (bankAccounts.length && !bankAccountId) {
+      errBox.textContent = 'Select which bank account received this payment.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -2409,11 +2480,12 @@ async function renderARPaymentPage(id) {
       const newBalance = Number((ar.amount - newAmountPaid).toFixed(2));
       const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
       const payments = Array.isArray(ar.payments) ? [...ar.payments] : [];
-      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, recordedBy: currentUser ? currentUser.email : null });
+      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
 
       await updateFinanceDoc('accountsReceivable', id, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
+      const cashAccountName = bankAccountName || 'Cash';
       await postGLEntries([
-        { date: payDate, account: 'Cash', debit: payAmount, credit: 0, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id },
+        { date: payDate, account: cashAccountName, debit: payAmount, credit: 0, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id, bankAccountId: bankAccountId || null },
         { date: payDate, account: 'Accounts Receivable', debit: 0, credit: payAmount, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id },
       ]);
       navigateTo('finance/accounts-receivable');
@@ -2535,9 +2607,9 @@ async function renderNewAPEntryPage() {
 }
 async function renderAPPaymentPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let ap;
+  let ap, bankAccounts = [];
   try {
-    ap = await fetchFinanceDoc('accountsPayable', id);
+    [ap, bankAccounts] = await Promise.all([fetchFinanceDoc('accountsPayable', id), fetchActiveBankAccounts()]);
   } catch (e) {
     console.error(e);
     contentWrap(poLoadErrorHtml());
@@ -2566,6 +2638,7 @@ async function renderAPPaymentPage(id) {
         ${numberField('payAmount', 'Payment Amount (₱)', { required: true, step: '0.01', value: ap.balance })}
         ${dateField('payDate', 'Payment Date', { required: true, value: todayISO() })}
         ${selectField('payMethod', 'Payment Method', PAYMENT_METHODS, { required: true, value: 'Cash' })}
+        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
         ${textField('payNotes', 'Notes / Reference')}
       </div>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
@@ -2585,9 +2658,17 @@ async function renderAPPaymentPage(id) {
     const payDate = document.getElementById('field-payDate').value;
     const payMethod = document.getElementById('field-payMethod').value;
     const payNotes = document.getElementById('field-payNotes').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel ? bankSel.value : '';
+    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
 
     if (!payAmount || payAmount <= 0 || !payDate) {
       errBox.textContent = 'Enter a valid payment amount and date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (bankAccounts.length && !bankAccountId) {
+      errBox.textContent = 'Select which bank account this was paid from.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -2603,12 +2684,13 @@ async function renderAPPaymentPage(id) {
       const newBalance = Number((ap.amount - newAmountPaid).toFixed(2));
       const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
       const payments = Array.isArray(ap.payments) ? [...ap.payments] : [];
-      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, recordedBy: currentUser ? currentUser.email : null });
+      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
 
       await updateFinanceDoc('accountsPayable', id, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
+      const cashAccountName = bankAccountName || 'Cash';
       await postGLEntries([
         { date: payDate, account: 'Accounts Payable', debit: payAmount, credit: 0, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id },
-        { date: payDate, account: 'Cash', debit: 0, credit: payAmount, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id },
+        { date: payDate, account: cashAccountName, debit: 0, credit: payAmount, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id, bankAccountId: bankAccountId || null },
       ]);
       navigateTo('finance/accounts-payable');
     } catch (err) {
@@ -2643,33 +2725,82 @@ function expenseTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
               <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<button data-mark-paid-exp="${e.id}" data-amount="${e.amount}" data-category="${escapeAttr(e.category)}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/expenses/pay/${e.id}" class="text-forest hover:underline text-xs font-medium">Mark Paid</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
 }
-function wireExpenseMarkPaid() {
-  document.querySelectorAll('[data-mark-paid-exp]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; btn.textContent = 'Updating...';
-      const id = btn.getAttribute('data-mark-paid-exp');
-      const amount = Number(btn.getAttribute('data-amount')) || 0;
-      const category = btn.getAttribute('data-category');
-      try {
-        const datePaid = todayISO();
-        await updateFinanceDoc('expenses', id, { status: 'Paid', datePaid });
-        await postGLEntries([
-          { date: datePaid, account: category, debit: amount, credit: 0, description: `Expense paid — ${category}`, sourceType: 'expense', sourceId: id },
-          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: `Expense paid — ${category}`, sourceType: 'expense', sourceId: id },
-        ]);
-        renderExpensesPage();
-      } catch (e) {
-        console.error(e);
-        alert('Could not update this expense. Please try again.');
-        btn.disabled = false; btn.textContent = 'Mark Paid';
-      }
-    });
+async function renderExpensePaymentPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let exp, bankAccounts = [];
+  try {
+    [exp, bankAccounts] = await Promise.all([fetchFinanceDoc('expenses', id), fetchActiveBankAccounts()]);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!exp) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Expense not found.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Mark Expense Paid</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(exp.category)}${exp.payee ? ' — ' + escapeAttr(exp.payee) : ''} · ${formatCurrency(exp.amount)}</p>
+    </div>
+    <form id="exp-pay-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="exp-pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('datePaid', 'Payment Date', { required: true, value: todayISO() })}
+        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="exp-pay-form-submit" type="submit" class="btn-primary"><span id="exp-pay-form-submit-text">Mark Paid</span></button>
+        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('exp-pay-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('exp-pay-form-submit');
+    const btnText = document.getElementById('exp-pay-form-submit-text');
+    const errBox = document.getElementById('exp-pay-form-error');
+    errBox.classList.add('hidden');
+    const datePaid = document.getElementById('field-datePaid').value;
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel ? bankSel.value : '';
+    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!datePaid) {
+      errBox.textContent = 'Enter the payment date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (bankAccounts.length && !bankAccountId) {
+      errBox.textContent = 'Select which bank account this was paid from.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('expenses', id, { status: 'Paid', datePaid, bankAccountId, bankAccountName });
+      const cashAccountName = bankAccountName || 'Cash';
+      await postGLEntries([
+        { date: datePaid, account: exp.category, debit: exp.amount, credit: 0, description: `Expense paid — ${exp.category}`, sourceType: 'expense', sourceId: id },
+        { date: datePaid, account: cashAccountName, debit: 0, credit: exp.amount, description: `Expense paid — ${exp.category}`, sourceType: 'expense', sourceId: id, bankAccountId: bankAccountId || null },
+      ]);
+      navigateTo('finance/expenses');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not update this expense. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Mark Paid';
+    }
   });
 }
 async function renderExpensesPage() {
@@ -2687,7 +2818,6 @@ async function renderExpensesPage() {
     const entries = await fetchFinanceCollection('expenses');
     document.getElementById('exp-list-container').innerHTML = expenseTableHtml(entries);
     refreshIcons();
-    wireExpenseMarkPaid();
   } catch (e) {
     console.error(e);
     document.getElementById('exp-list-container').innerHTML = poLoadErrorHtml();
@@ -2927,32 +3057,82 @@ function taxTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.taxAmount)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${taxFilingBadgeClass(e.filingStatus)}">${e.filingStatus}</span></td>
-              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<button data-mark-paid-tax="${e.id}" data-amount="${e.taxAmount}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<a href="#/finance/tax/pay/${e.id}" class="text-forest hover:underline text-xs font-medium">Mark Paid</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
 }
-function wireTaxMarkPaid() {
-  document.querySelectorAll('[data-mark-paid-tax]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; btn.textContent = 'Updating...';
-      const id = btn.getAttribute('data-mark-paid-tax');
-      const amount = Number(btn.getAttribute('data-amount')) || 0;
-      try {
-        const datePaid = todayISO();
-        await updateFinanceDoc('taxRecords', id, { filingStatus: 'Paid', datePaid });
-        await postGLEntries([
-          { date: datePaid, account: 'Taxes & Licenses Expense', debit: amount, credit: 0, description: 'Tax paid', sourceType: 'tax', sourceId: id },
-          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: 'Tax paid', sourceType: 'tax', sourceId: id },
-        ]);
-        renderTaxPage();
-      } catch (e) {
-        console.error(e);
-        alert('Could not update this tax record. Please try again.');
-        btn.disabled = false; btn.textContent = 'Mark Paid';
-      }
-    });
+async function renderTaxPaymentPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let tax, bankAccounts = [];
+  try {
+    [tax, bankAccounts] = await Promise.all([fetchFinanceDoc('taxRecords', id), fetchActiveBankAccounts()]);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!tax) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Tax record not found.</p><a href="#/finance/tax" class="mt-4 text-sm text-forest hover:underline">Back to Tax</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Mark Tax Paid</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(tax.taxType)} — ${escapeAttr(tax.period)} · ${formatCurrency(tax.taxAmount)}</p>
+    </div>
+    <form id="tax-pay-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="tax-pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('datePaid', 'Payment Date', { required: true, value: todayISO() })}
+        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="tax-pay-form-submit" type="submit" class="btn-primary"><span id="tax-pay-form-submit-text">Mark Paid</span></button>
+        <a href="#/finance/tax" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('tax-pay-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('tax-pay-form-submit');
+    const btnText = document.getElementById('tax-pay-form-submit-text');
+    const errBox = document.getElementById('tax-pay-form-error');
+    errBox.classList.add('hidden');
+    const datePaid = document.getElementById('field-datePaid').value;
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel ? bankSel.value : '';
+    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+
+    if (!datePaid) {
+      errBox.textContent = 'Enter the payment date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (bankAccounts.length && !bankAccountId) {
+      errBox.textContent = 'Select which bank account this was paid from.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('taxRecords', id, { filingStatus: 'Paid', datePaid, bankAccountId, bankAccountName });
+      const cashAccountName = bankAccountName || 'Cash';
+      await postGLEntries([
+        { date: datePaid, account: 'Taxes & Licenses Expense', debit: tax.taxAmount, credit: 0, description: 'Tax paid', sourceType: 'tax', sourceId: id },
+        { date: datePaid, account: cashAccountName, debit: 0, credit: tax.taxAmount, description: 'Tax paid', sourceType: 'tax', sourceId: id, bankAccountId: bankAccountId || null },
+      ]);
+      navigateTo('finance/tax');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not update this tax record. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Mark Paid';
+    }
   });
 }
 async function renderTaxPage() {
@@ -2970,7 +3150,6 @@ async function renderTaxPage() {
     const entries = await fetchFinanceCollection('taxRecords');
     document.getElementById('tax-list-container').innerHTML = taxTableHtml(entries);
     refreshIcons();
-    wireTaxMarkPaid();
   } catch (e) {
     console.error(e);
     document.getElementById('tax-list-container').innerHTML = poLoadErrorHtml();
@@ -4100,6 +4279,645 @@ async function renderSupplierPaymentsPage() {
   } catch (e) {
     console.error(e);
     document.getElementById('sp-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ==========================================================================
+   CASH MANAGEMENT MODULE  (Firestore-backed: bankAccounts, cashTransactions,
+   bankReconciliations — balances computed from generalLedger entries
+   tagged with a bankAccountId)
+   ========================================================================== */
+const BANK_ACCOUNT_TYPES = ['Checking', 'Savings', 'Other'];
+const BANK_ACCOUNT_STATUSES = ['Active', 'Inactive'];
+const CASH_TXN_TYPES = ['Deposit', 'Withdrawal', 'Transfer'];
+
+function maskAccountNumber(num) {
+  if (!num) return '';
+  const clean = String(num).replace(/\s+/g, '');
+  return clean.length > 4 ? '••••' + clean.slice(-4) : clean;
+}
+async function fetchActiveBankAccounts() {
+  const all = await fetchFinanceCollection('bankAccounts');
+  return all.filter(b => b.status !== 'Inactive');
+}
+function bankAccountSelectHtml(bankAccounts, selectedId, opts = {}) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Bank Account${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <select id="field-bankAccountId" ${opts.required ? 'required' : ''} class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">Select...</option>
+        ${bankAccounts.map(b => `<option value="${b.id}" ${b.id === selectedId ? 'selected' : ''}>${escapeAttr(b.nickname)}${b.bankName ? ' — ' + escapeAttr(b.bankName) : ''}</option>`).join('')}
+      </select>
+    </div>`;
+}
+async function computeBankAccountBalances(bankAccounts) {
+  const glEntries = await fetchFinanceCollection('generalLedger');
+  const balances = {};
+  bankAccounts.forEach(b => { balances[b.id] = Number(b.openingBalance) || 0; });
+  glEntries.forEach(g => {
+    if (g.bankAccountId && Object.prototype.hasOwnProperty.call(balances, g.bankAccountId)) {
+      balances[g.bankAccountId] += (Number(g.debit) || 0) - (Number(g.credit) || 0);
+    }
+  });
+  return balances;
+}
+async function computeBankAccountBalanceAsOf(bankAccountId, openingBalance, asOfDate) {
+  const glEntries = await fetchFinanceCollection('generalLedger');
+  let balance = Number(openingBalance) || 0;
+  glEntries.forEach(g => {
+    if (g.bankAccountId === bankAccountId && (!asOfDate || g.date <= asOfDate)) {
+      balance += (Number(g.debit) || 0) - (Number(g.credit) || 0);
+    }
+  });
+  return balance;
+}
+
+/* ---- Bank Accounts ---- */
+function bankAccountTableHtml(accounts, balances) {
+  if (!accounts.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No bank accounts recorded yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Nickname</th><th class="px-4 py-3">Bank</th><th class="px-4 py-3">Account No.</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Balance</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${accounts.map(b => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${b.nickname || '—'}</td>
+              <td class="px-4 py-3">${b.bankName || '—'}</td>
+              <td class="px-4 py-3">${maskAccountNumber(b.accountNumber) || '—'}</td>
+              <td class="px-4 py-3">${b.accountType || '—'}</td>
+              <td class="px-4 py-3 font-medium">${formatCurrency(balances ? balances[b.id] : b.openingBalance)}</td>
+              <td class="px-4 py-3">${statusBadge(b.status)}</td>
+              <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-accounts/edit/${b.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function renderBankAccountsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Bank Accounts</h1>
+        <p class="text-sm text-muted mt-1">Bank account master records — kept manually here, never connected to an actual bank. Balances reflect payments tagged to each account plus transactions recorded in Cash Position.</p>
+      </div>
+      <a href="#/cash-management/bank-accounts/new" class="btn-primary text-sm">+ New Bank Account</a>
+    </div>
+    <div id="bank-account-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const accounts = await fetchFinanceCollection('bankAccounts');
+    const balances = await computeBankAccountBalances(accounts);
+    document.getElementById('bank-account-list-container').innerHTML = bankAccountTableHtml(accounts, balances);
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('bank-account-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+function bankAccountFormFieldsHtml(b = {}) {
+  return `
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      ${textField('nickname', 'Account Nickname', { required: true, value: b.nickname, placeholder: 'e.g. BPI Main' })}
+      ${textField('bankName', 'Bank Name', { value: b.bankName })}
+      ${textField('accountNumber', 'Account Number', { value: b.accountNumber })}
+      ${selectField('accountType', 'Account Type', BANK_ACCOUNT_TYPES, { value: b.accountType || 'Checking' })}
+      ${numberField('openingBalance', 'Opening Balance (₱)', { required: true, step: '0.01', value: b.openingBalance != null ? b.openingBalance : 0 })}
+      ${dateField('openingBalanceDate', 'Opening Balance Date', { required: true, value: b.openingBalanceDate || todayISO() })}
+      ${selectField('status', 'Status', BANK_ACCOUNT_STATUSES, { value: b.status || 'Active' })}
+      ${textareaField('notes', 'Notes', { span2: true, value: b.notes })}
+    </div>`;
+}
+function readBankAccountFormValues() {
+  const val = (id) => { const el = document.getElementById('field-' + id); return el ? el.value.trim() : ''; };
+  return {
+    nickname: val('nickname'),
+    bankName: val('bankName'),
+    accountNumber: val('accountNumber'),
+    accountType: val('accountType') || 'Checking',
+    openingBalance: Number(val('openingBalance')) || 0,
+    openingBalanceDate: val('openingBalanceDate'),
+    status: val('status') || 'Active',
+    notes: val('notes'),
+  };
+}
+async function renderNewBankAccountPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Bank Account</h1>
+    </div>
+    <form id="bank-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="bank-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      ${bankAccountFormFieldsHtml()}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="bank-form-submit" type="submit" class="btn-primary"><span id="bank-form-submit-text">Save Bank Account</span></button>
+        <a href="#/cash-management/bank-accounts" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('bank-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('bank-form-submit');
+    const btnText = document.getElementById('bank-form-submit-text');
+    const errBox = document.getElementById('bank-form-error');
+    errBox.classList.add('hidden');
+    const data = readBankAccountFormValues();
+    if (!data.nickname || !data.openingBalanceDate) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('bankAccounts', data);
+      navigateTo('cash-management/bank-accounts');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this bank account. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Bank Account';
+    }
+  });
+}
+async function renderEditBankAccountPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let b;
+  try {
+    b = await fetchFinanceDoc('bankAccounts', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!b) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Bank account not found.</p><a href="#/cash-management/bank-accounts" class="mt-4 text-sm text-forest hover:underline">Back to Bank Accounts</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Edit Bank Account</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(b.nickname)}</p>
+    </div>
+    <form id="bank-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="bank-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      ${bankAccountFormFieldsHtml(b)}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="bank-form-submit" type="submit" class="btn-primary"><span id="bank-form-submit-text">Save Changes</span></button>
+        <a href="#/cash-management/bank-accounts" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('bank-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('bank-form-submit');
+    const btnText = document.getElementById('bank-form-submit-text');
+    const errBox = document.getElementById('bank-form-error');
+    errBox.classList.add('hidden');
+    const data = readBankAccountFormValues();
+    if (!data.nickname || !data.openingBalanceDate) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('bankAccounts', id, data);
+      navigateTo('cash-management/bank-accounts');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save changes. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Changes';
+    }
+  });
+}
+
+/* ---- Cash Position + Record Transaction ---- */
+async function renderCashPositionPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Cash Position</h1>
+        <p class="text-sm text-muted mt-1">Balances reflect AR/AP/Expense/Tax payments tagged to each account, plus transactions recorded here directly.</p>
+      </div>
+      <a href="#/cash-management/cash-position/new" class="btn-primary text-sm">+ Record Transaction</a>
+    </div>
+    <div id="cash-position-summary" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Cash Activity</h2>
+    <div id="cash-position-activity" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const accounts = await fetchFinanceCollection('bankAccounts');
+    const balances = await computeBankAccountBalances(accounts);
+    const totalCash = accounts.reduce((sum, b) => sum + (balances[b.id] || 0), 0);
+
+    document.getElementById('cash-position-summary').innerHTML = `
+      <div class="card p-5 sm:col-span-1">
+        <p class="text-xs font-medium text-muted uppercase tracking-wide">Total Cash</p>
+        <p class="text-2xl font-semibold text-forest mt-3">${formatCurrency(totalCash)}</p>
+        <p class="text-xs text-muted mt-1">${accounts.length} account${accounts.length === 1 ? '' : 's'}</p>
+      </div>
+      <div class="sm:col-span-2 card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Account</th><th class="px-4 py-3">Bank</th><th class="px-4 py-3 text-right">Balance</th>
+          </tr></thead>
+          <tbody>
+            ${accounts.length ? accounts.map(b => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${b.nickname || '—'}</td>
+                <td class="px-4 py-3">${b.bankName || '—'}</td>
+                <td class="px-4 py-3 text-right font-medium">${formatCurrency(balances[b.id])}</td>
+              </tr>`).join('') : `<tr><td colspan="3" class="px-4 py-6 text-center text-muted">No bank accounts yet — <a href="#/cash-management/bank-accounts/new" class="text-forest hover:underline">add one</a>.</td></tr>`}
+          </tbody>
+        </table>
+      </div>`;
+
+    const glEntries = await fetchFinanceCollection('generalLedger');
+    const cashEntries = glEntries.filter(g => g.bankAccountId).slice(0, 20);
+    const accountNameById = {}; accounts.forEach(a => { accountNameById[a.id] = a.nickname; });
+
+    document.getElementById('cash-position-activity').innerHTML = cashEntries.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Date</th><th class="px-4 py-3">Account</th><th class="px-4 py-3">Description</th><th class="px-4 py-3 text-right">Debit</th><th class="px-4 py-3 text-right">Credit</th>
+          </tr></thead>
+          <tbody>
+            ${cashEntries.map(g => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3">${formatDate(g.date)}</td>
+                <td class="px-4 py-3">${accountNameById[g.bankAccountId] || g.account}</td>
+                <td class="px-4 py-3">${g.description || '—'}</td>
+                <td class="px-4 py-3 text-right">${g.debit ? formatCurrency(g.debit) : ''}</td>
+                <td class="px-4 py-3 text-right">${g.credit ? formatCurrency(g.credit) : ''}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No cash activity yet.</div>`;
+  } catch (e) {
+    console.error(e);
+    document.getElementById('cash-position-summary').innerHTML = poLoadErrorHtml();
+    document.getElementById('cash-position-activity').innerHTML = '';
+  }
+}
+async function renderNewCashTransactionPage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let accounts = [];
+  try {
+    accounts = await fetchFinanceCollection('bankAccounts');
+  } catch (e) { console.error(e); }
+
+  if (!accounts.length) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <p class="text-sm text-charcoal font-medium">No bank accounts yet.</p>
+      <p class="text-sm text-muted mt-1">Add a bank account first before recording a cash transaction.</p>
+      <a href="#/cash-management/bank-accounts/new" class="mt-4 btn-primary text-sm">+ New Bank Account</a>
+    </div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Record Transaction</h1>
+      <p class="text-sm text-muted mt-1">For cash movements that don't come from AR, AP, Expenses, or Tax — capital, transfers, bank fees, etc.</p>
+    </div>
+    <form id="cash-txn-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="cash-txn-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${selectField('txnType', 'Transaction Type', CASH_TXN_TYPES, { required: true, value: 'Deposit' })}
+        ${numberField('txnAmount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('txnDate', 'Date', { required: true, value: todayISO() })}
+      </div>
+      <div id="cash-txn-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+      ${textareaField('txnDescription', 'Description', { span2: true })}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="cash-txn-form-submit" type="submit" class="btn-primary"><span id="cash-txn-form-submit-text">Save Transaction</span></button>
+        <a href="#/cash-management/cash-position" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  const fieldsContainer = document.getElementById('cash-txn-fields');
+  const typeSel = document.getElementById('field-txnType');
+
+  function renderTypeFields() {
+    const type = typeSel.value;
+    if (type === 'Transfer') {
+      fieldsContainer.innerHTML = `
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">From Account <span class="text-red-500">*</span></label>
+          <select id="field-fromBankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">Select...</option>
+            ${accounts.map(a => `<option value="${a.id}">${escapeAttr(a.nickname)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">To Account <span class="text-red-500">*</span></label>
+          <select id="field-toBankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">Select...</option>
+            ${accounts.map(a => `<option value="${a.id}">${escapeAttr(a.nickname)}</option>`).join('')}
+          </select>
+        </div>`;
+    } else {
+      fieldsContainer.innerHTML = `
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">Bank Account <span class="text-red-500">*</span></label>
+          <select id="field-bankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">Select...</option>
+            ${accounts.map(a => `<option value="${a.id}">${escapeAttr(a.nickname)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">${type === 'Deposit' ? 'Source' : 'Category'} <span class="text-red-500">*</span></label>
+          <select id="field-offsetAccount" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">Select...</option>
+            ${CASH_OFFSET_ACCOUNTS.map(a => `<option value="${a}">${a}</option>`).join('')}
+          </select>
+        </div>`;
+    }
+  }
+  renderTypeFields();
+  typeSel.addEventListener('change', renderTypeFields);
+
+  document.getElementById('cash-txn-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('cash-txn-form-submit');
+    const btnText = document.getElementById('cash-txn-form-submit-text');
+    const errBox = document.getElementById('cash-txn-form-error');
+    errBox.classList.add('hidden');
+
+    const type = typeSel.value;
+    const amount = Number(document.getElementById('field-txnAmount').value) || 0;
+    const date = document.getElementById('field-txnDate').value;
+    const description = document.getElementById('field-txnDescription').value.trim();
+
+    if (!amount || amount <= 0 || !date) {
+      errBox.textContent = 'Enter a valid amount and date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      if (type === 'Transfer') {
+        const fromSel = document.getElementById('field-fromBankAccountId');
+        const toSel = document.getElementById('field-toBankAccountId');
+        const fromId = fromSel.value, toId = toSel.value;
+        if (!fromId || !toId || fromId === toId) {
+          errBox.textContent = 'Select two different accounts to transfer between.';
+          errBox.classList.remove('hidden');
+          btn.disabled = false; btnText.textContent = 'Save Transaction';
+          return;
+        }
+        const fromName = fromSel.options[fromSel.selectedIndex].text;
+        const toName = toSel.options[toSel.selectedIndex].text;
+        const txnRef = await createFinanceDoc('cashTransactions', { type, amount, date, description, fromBankAccountId: fromId, fromBankAccountName: fromName, toBankAccountId: toId, toBankAccountName: toName });
+        await postGLEntries([
+          { date, account: toName, debit: amount, credit: 0, description: description || `Transfer from ${fromName} to ${toName}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId: toId },
+          { date, account: fromName, debit: 0, credit: amount, description: description || `Transfer from ${fromName} to ${toName}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId: fromId },
+        ]);
+      } else {
+        const bankSel = document.getElementById('field-bankAccountId');
+        const offsetSel = document.getElementById('field-offsetAccount');
+        const bankAccountId = bankSel.value, offsetAccount = offsetSel.value;
+        if (!bankAccountId || !offsetAccount) {
+          errBox.textContent = 'Please fill in all required fields.';
+          errBox.classList.remove('hidden');
+          btn.disabled = false; btnText.textContent = 'Save Transaction';
+          return;
+        }
+        const bankAccountName = bankSel.options[bankSel.selectedIndex].text;
+        const txnRef = await createFinanceDoc('cashTransactions', { type, amount, date, description, bankAccountId, bankAccountName, offsetAccount });
+        if (type === 'Deposit') {
+          await postGLEntries([
+            { date, account: bankAccountName, debit: amount, credit: 0, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId },
+            { date, account: offsetAccount, debit: 0, credit: amount, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id },
+          ]);
+        } else {
+          await postGLEntries([
+            { date, account: offsetAccount, debit: amount, credit: 0, description: description || `Withdrawal — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id },
+            { date, account: bankAccountName, debit: 0, credit: amount, description: description || `Withdrawal — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId },
+          ]);
+        }
+      }
+      navigateTo('cash-management/cash-position');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this transaction. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Transaction';
+    }
+  });
+}
+
+/* ---- Bank Reconciliation ---- */
+function reconciliationStatusBadgeClass(status) {
+  const map = { 'Balanced': 'bg-teal-50 text-teal-700 border-teal-200', 'Discrepancy': 'bg-red-50 text-red-600 border-red-200' };
+  return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
+}
+async function renderBankReconciliationPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Bank Reconciliation</h1>
+      <p class="text-sm text-muted mt-1">Compare each account's computed system balance against its bank statement — the statement balance is typed in from what your actual bank shows.</p>
+    </div>
+    <div id="recon-accounts-container" class="text-sm text-muted mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Reconciliation History</h2>
+    <div id="recon-history-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const [accounts, recons] = await Promise.all([fetchFinanceCollection('bankAccounts'), fetchFinanceCollection('bankReconciliations')]);
+    const balances = await computeBankAccountBalances(accounts);
+
+    document.getElementById('recon-accounts-container').innerHTML = accounts.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Account</th><th class="px-4 py-3 text-right">Current System Balance</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${accounts.map(b => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${b.nickname || '—'}</td>
+                <td class="px-4 py-3 text-right">${formatCurrency(balances[b.id])}</td>
+                <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-reconciliation/new/${b.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Reconcile</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No bank accounts yet — <a href="#/cash-management/bank-accounts/new" class="text-forest hover:underline">add one</a>.</div>`;
+
+    document.getElementById('recon-history-container').innerHTML = recons.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Account</th><th class="px-4 py-3">Statement Date</th><th class="px-4 py-3 text-right">Statement Balance</th><th class="px-4 py-3 text-right">System Balance</th><th class="px-4 py-3 text-right">Variance</th><th class="px-4 py-3">Status</th>
+          </tr></thead>
+          <tbody>
+            ${recons.slice(0, 20).map(r => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${r.bankAccountName || '—'}</td>
+                <td class="px-4 py-3">${formatDate(r.statementDate)}</td>
+                <td class="px-4 py-3 text-right">${formatCurrency(r.statementBalance)}</td>
+                <td class="px-4 py-3 text-right">${formatCurrency(r.systemBalance)}</td>
+                <td class="px-4 py-3 text-right">${formatCurrency(r.variance)}</td>
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${reconciliationStatusBadgeClass(r.status)}">${r.status}</span></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No reconciliations recorded yet.</div>`;
+  } catch (e) {
+    console.error(e);
+    document.getElementById('recon-accounts-container').innerHTML = poLoadErrorHtml();
+    document.getElementById('recon-history-container').innerHTML = '';
+  }
+}
+async function renderNewReconciliationPage(bankAccountId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let bankAccount;
+  try {
+    bankAccount = await fetchFinanceDoc('bankAccounts', bankAccountId);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!bankAccount) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Bank account not found.</p><a href="#/cash-management/bank-reconciliation" class="mt-4 text-sm text-forest hover:underline">Back to Bank Reconciliation</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Reconciliation</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(bankAccount.nickname)} — enter the ending balance shown on your actual bank statement.</p>
+    </div>
+    <form id="recon-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="recon-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('statementDate', 'Statement Date', { required: true, value: todayISO() })}
+        ${numberField('statementBalance', 'Statement Ending Balance (₱)', { required: true, step: '0.01' })}
+      </div>
+      ${textareaField('reconNotes', 'Outstanding / Uncleared Items', { hint: 'Anything not yet reflected on the bank statement (e.g. checks issued but not cleared).' })}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="recon-form-submit" type="submit" class="btn-primary"><span id="recon-form-submit-text">Save Reconciliation</span></button>
+        <a href="#/cash-management/bank-reconciliation" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('recon-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('recon-form-submit');
+    const btnText = document.getElementById('recon-form-submit-text');
+    const errBox = document.getElementById('recon-form-error');
+    errBox.classList.add('hidden');
+    const statementDate = document.getElementById('field-statementDate').value;
+    const statementBalance = Number(document.getElementById('field-statementBalance').value) || 0;
+    const reconNotes = document.getElementById('field-reconNotes').value.trim();
+
+    if (!statementDate) {
+      errBox.textContent = 'Enter the statement date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const systemBalance = await computeBankAccountBalanceAsOf(bankAccountId, bankAccount.openingBalance, statementDate);
+      const variance = Number((statementBalance - systemBalance).toFixed(2));
+      const status = Math.abs(variance) <= 0.01 ? 'Balanced' : 'Discrepancy';
+      await createFinanceDoc('bankReconciliations', { bankAccountId, bankAccountName: bankAccount.nickname, statementDate, statementBalance, systemBalance, variance, status, notes: reconNotes });
+      navigateTo('cash-management/bank-reconciliation');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this reconciliation. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Reconciliation';
+    }
+  });
+}
+
+/* ---- Cash Forecast (fully automatic — reads AR/AP due dates) ---- */
+async function renderCashForecastPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Cash Forecast</h1>
+      <p class="text-sm text-muted mt-1">Projects future cash based on outstanding Accounts Receivable and Accounts Payable due dates.</p>
+    </div>
+    <div id="forecast-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const [bankAccounts, arEntries, apEntries] = await Promise.all([
+      fetchFinanceCollection('bankAccounts'),
+      fetchFinanceCollection('accountsReceivable'),
+      fetchFinanceCollection('accountsPayable'),
+    ]);
+    const balances = await computeBankAccountBalances(bankAccounts);
+    const currentCash = bankAccounts.reduce((sum, b) => sum + (balances[b.id] || 0), 0);
+
+    const today = todayISO();
+    function bucketFor(dueDate) {
+      if (!dueDate) return 'No Due Date';
+      if (dueDate < today) return 'Overdue';
+      const days = Math.round((new Date(dueDate) - new Date(today)) / 86400000);
+      if (days <= 7) return 'Next 7 Days';
+      if (days <= 30) return '8–30 Days';
+      if (days <= 60) return '31–60 Days';
+      return '60+ Days';
+    }
+    const BUCKET_ORDER = ['Overdue', 'Next 7 Days', '8–30 Days', '31–60 Days', '60+ Days', 'No Due Date'];
+    const buckets = {};
+    BUCKET_ORDER.forEach(b => { buckets[b] = { inflow: 0, outflow: 0 }; });
+
+    arEntries.filter(e => (Number(e.balance) || 0) > 0.01).forEach(e => {
+      buckets[bucketFor(e.dueDate)].inflow += Number(e.balance) || 0;
+    });
+    apEntries.filter(e => (Number(e.balance) || 0) > 0.01).forEach(e => {
+      buckets[bucketFor(e.dueDate)].outflow += Number(e.balance) || 0;
+    });
+
+    let running = currentCash;
+    const rows = BUCKET_ORDER.map(b => {
+      const net = buckets[b].inflow - buckets[b].outflow;
+      running += net;
+      return { bucket: b, inflow: buckets[b].inflow, outflow: buckets[b].outflow, net, running };
+    });
+
+    document.getElementById('forecast-container').innerHTML = `
+      <div class="card p-5 mb-6 max-w-sm">
+        <p class="text-xs font-medium text-muted uppercase tracking-wide">Current Cash (all accounts)</p>
+        <p class="text-2xl font-semibold text-forest mt-3">${formatCurrency(currentCash)}</p>
+      </div>
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Period</th><th class="px-4 py-3 text-right">Expected In (AR)</th><th class="px-4 py-3 text-right">Expected Out (AP)</th><th class="px-4 py-3 text-right">Net</th><th class="px-4 py-3 text-right">Projected Balance</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${r.bucket}</td>
+                <td class="px-4 py-3 text-right text-teal-700">${r.inflow ? formatCurrency(r.inflow) : '—'}</td>
+                <td class="px-4 py-3 text-right text-red-600">${r.outflow ? formatCurrency(r.outflow) : '—'}</td>
+                <td class="px-4 py-3 text-right ${r.net < 0 ? 'text-red-600' : 'text-charcoal'}">${formatCurrency(r.net)}</td>
+                <td class="px-4 py-3 text-right font-medium">${formatCurrency(r.running)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-muted mt-3">Based on outstanding Accounts Receivable and Accounts Payable balances and their due dates as of today.</p>`;
+  } catch (e) {
+    console.error(e);
+    document.getElementById('forecast-container').innerHTML = poLoadErrorHtml();
   }
 }
 
