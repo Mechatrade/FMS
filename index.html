@@ -1080,6 +1080,73 @@ async function fetchCRMSalesOrderByControlNo(controlNo) {
   const d = snap.docs[0];
   return { id: d.id, ...d.data() };
 }
+async function fetchAllCRMSuppliers() {
+  if (!crmReady) throw new Error('CRM connection not configured.');
+  const snap = await getDocs(collection(crmDb, 'suppliers'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+let crmSuppliersCache = null;
+function wireCRMSupplierSearch() {
+  const input = document.getElementById('crm-supplier-search');
+  const resultsBox = document.getElementById('crm-supplier-results');
+  const statusEl = document.getElementById('crm-supplier-status');
+
+  input.addEventListener('input', async () => {
+    const query = input.value.trim().toLowerCase();
+    if (!query) { resultsBox.classList.add('hidden'); statusEl.textContent = ''; return; }
+
+    if (!crmSuppliersCache) {
+      statusEl.textContent = 'Searching CRM...';
+      try {
+        crmSuppliersCache = await fetchAllCRMSuppliers();
+        statusEl.textContent = '';
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = 'Could not reach CRM. Check that the CRM-v2 Firestore rule for suppliers has been updated.';
+        return;
+      }
+    }
+
+    const matches = crmSuppliersCache.filter(s => (s.name || '').toLowerCase().includes(query)).slice(0, 8);
+    if (!matches.length) {
+      resultsBox.innerHTML = `<div class="px-3 py-2 text-xs text-muted">No matching suppliers in CRM.</div>`;
+      resultsBox.classList.remove('hidden');
+      return;
+    }
+    resultsBox.innerHTML = matches.map(s => `
+      <button type="button" data-crm-supplier-id="${s.id}" class="w-full text-left px-3 py-2 text-sm hover:bg-cream border-b border-borderc last:border-0">
+        <span class="font-medium text-charcoal">${escapeAttr(s.name)}</span>
+        ${s.contactPerson ? `<span class="text-xs text-muted"> — ${escapeAttr(s.contactPerson)}</span>` : ''}
+      </button>`).join('');
+    resultsBox.classList.remove('hidden');
+
+    resultsBox.querySelectorAll('[data-crm-supplier-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const supplier = crmSuppliersCache.find(s => s.id === btn.getAttribute('data-crm-supplier-id'));
+        if (supplier) fillSupplierFormFromCRM(supplier);
+        resultsBox.classList.add('hidden');
+        input.value = supplier ? supplier.name : '';
+      });
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!resultsBox.contains(e.target) && e.target !== input) resultsBox.classList.add('hidden');
+  });
+}
+function fillSupplierFormFromCRM(s) {
+  const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
+  setVal('name', s.name);
+  setVal('contactPerson', s.contactPerson);
+  setVal('phone', s.phone);
+
+  const noteParts = [`Pulled from CRM supplier record${s.department ? ' (Department: ' + s.department + ')' : ''}.`];
+  if (s.lastCanvassDate) noteParts.push(`Last canvassed in CRM: ${s.lastCanvassDate}.`);
+  setVal('notes', noteParts.join(' '));
+
+  const statusEl = document.getElementById('crm-supplier-status');
+  if (statusEl) statusEl.textContent = 'Filled from CRM — Category, Email, Address, and Payment Terms aren\'t in CRM yet, so set those manually.';
+}
 
 /* ---- Reusable form field builders ---- */
 function textField(name, label, opts = {}) {
@@ -3143,6 +3210,18 @@ async function renderNewSupplierPage() {
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Supplier</h1>
     </div>
+
+    <div class="card p-5 mb-6 max-w-3xl">
+      <h2 class="text-sm font-semibold text-charcoal mb-1">Pull from CRM</h2>
+      <p class="text-xs text-muted mb-3">Type a supplier name to search CRM's supplier records. Click a match to fill the fields below — everything stays editable before you save.</p>
+      <div class="relative">
+        <input id="crm-supplier-search" type="text" placeholder="Start typing a supplier name..." autocomplete="off"
+          class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+        <div id="crm-supplier-results" class="hidden absolute z-10 mt-1 w-full bg-white border border-borderc rounded-md shadow-card max-h-64 overflow-y-auto"></div>
+      </div>
+      <p id="crm-supplier-status" class="text-xs text-muted mt-2"></p>
+    </div>
+
     <form id="supplier-form" class="card p-6 space-y-4 max-w-3xl">
       <div id="supplier-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       ${supplierFormFieldsHtml()}
@@ -3153,6 +3232,7 @@ async function renderNewSupplierPage() {
     </form>`);
   refreshIcons();
   wirePaymentTermsField();
+  wireCRMSupplierSearch();
   document.getElementById('supplier-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('supplier-form-submit');
