@@ -3135,7 +3135,7 @@ function supplierTableHtml(suppliers) {
     <div class="card overflow-x-auto">
       <table class="w-full text-sm">
         <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Contact Person</th><th class="px-4 py-3">Phone</th><th class="px-4 py-3">Payment Terms</th><th class="px-4 py-3">Verified</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Contact Person</th><th class="px-4 py-3">Phone</th><th class="px-4 py-3">Payment Terms</th><th class="px-4 py-3">Docs</th><th class="px-4 py-3">Verified</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
         </tr></thead>
         <tbody>
           ${suppliers.map(s => `
@@ -3145,6 +3145,7 @@ function supplierTableHtml(suppliers) {
               <td class="px-4 py-3">${s.contactPerson || '—'}</td>
               <td class="px-4 py-3">${s.phone || '—'}</td>
               <td class="px-4 py-3">${s.paymentTerms || '—'}</td>
+              <td class="px-4 py-3">${Array.isArray(s.documents) && s.documents.length ? `<span class="inline-flex items-center gap-1 text-xs text-charcoal">${icon('paperclip', 'w-3.5 h-3.5 text-muted')} ${s.documents.length}</span>` : '<span class="text-xs text-muted">—</span>'}</td>
               <td class="px-4 py-3">${s.verified ? `<span class="inline-flex items-center gap-1 text-forest text-xs font-medium">${icon('check-circle', 'w-3.5 h-3.5')} Verified</span>` : '<span class="text-xs text-muted">—</span>'}</td>
               <td class="px-4 py-3">${statusBadge(s.status)}</td>
               <td class="px-4 py-3 text-right"><a href="#/procurement/suppliers/edit/${s.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
@@ -3173,6 +3174,53 @@ async function renderSuppliersPage() {
     document.getElementById('supplier-list-container').innerHTML = poLoadErrorHtml();
   }
 }
+const SUPPLIER_DOC_DEFAULT_LABELS = ['Bank Details', 'BIR 2303', 'Business Permit', 'Company Profile', 'Distributor Certificate', 'SEC/DTI Registration', "Supplier's Quote"];
+function addDocumentRow(docItem = {}) {
+  const container = document.getElementById('doc-rows');
+  const row = document.createElement('div');
+  row.className = 'grid grid-cols-12 gap-2 items-center';
+  row.setAttribute('data-doc-row', '1');
+  row.innerHTML = `
+    <div class="col-span-3">
+      <input type="text" placeholder="Label (e.g. Business Permit)" value="${escapeAttr(docItem.label)}"
+        class="doc-label w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>
+    <div class="col-span-7">
+      <input type="text" placeholder="Paste Drive link..." value="${escapeAttr(docItem.link)}"
+        class="doc-link w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>
+    <div class="col-span-2 text-right flex items-center justify-end gap-2">
+      ${docItem.link ? `<a href="${escapeAttr(docItem.link)}" target="_blank" rel="noopener noreferrer" class="text-forest hover:text-forest-dark" title="Open">${icon('external-link', 'w-4 h-4')}</a>` : `<span class="doc-open-slot"></span>`}
+      <button type="button" class="doc-remove text-muted hover:text-red-600" title="Remove">${icon('x', 'w-4 h-4')}</button>
+    </div>`;
+  container.appendChild(row);
+  refreshIcons();
+  const linkInput = row.querySelector('.doc-link');
+  const openSlot = row.querySelector('.doc-open-slot');
+  if (openSlot) {
+    linkInput.addEventListener('change', () => {
+      if (linkInput.value.trim() && !row.querySelector('a')) {
+        openSlot.outerHTML = `<a href="${escapeAttr(linkInput.value.trim())}" target="_blank" rel="noopener noreferrer" class="text-forest hover:text-forest-dark" title="Open">${icon('external-link', 'w-4 h-4')}</a>`;
+        refreshIcons();
+      }
+    });
+  }
+  row.querySelector('.doc-remove').addEventListener('click', () => row.remove());
+}
+function wireSupplierDocuments(s = {}) {
+  document.getElementById('doc-add-row').addEventListener('click', () => addDocumentRow());
+  const docs = Array.isArray(s.documents) && s.documents.length ? s.documents : SUPPLIER_DOC_DEFAULT_LABELS.map(label => ({ label, link: '' }));
+  docs.forEach(d => addDocumentRow(d));
+}
+function readSupplierDocuments() {
+  const documents = [];
+  document.querySelectorAll('#doc-rows [data-doc-row]').forEach(row => {
+    const label = row.querySelector('.doc-label').value.trim();
+    const link = row.querySelector('.doc-link').value.trim();
+    if (link) documents.push({ label, link });
+  });
+  return documents;
+}
 function supplierFormFieldsHtml(s = {}) {
   return `
     <input type="hidden" id="field-crmSupplierId" value="${escapeAttr(s.crmSupplierId)}" />
@@ -3185,6 +3233,14 @@ function supplierFormFieldsHtml(s = {}) {
       ${selectField('status', 'Status', SUPPLIER_STATUSES, { value: s.status || 'Active' })}
       ${textareaField('address', 'Address', { span2: true, value: s.address })}
       ${paymentTermsFieldHtml({ type: s.paymentTermsType, advanceAmount: s.advancePaymentAmount, days: s.paymentTermsDays, customDays: s.customPaymentDays })}
+      <div class="sm:col-span-2">
+        <div class="flex items-center justify-between mb-2">
+          <label class="block text-sm font-medium text-charcoal">Documents</label>
+          <button type="button" id="doc-add-row" class="text-xs font-medium text-forest hover:underline">+ Add Document</button>
+        </div>
+        <div id="doc-rows" class="space-y-2"></div>
+        <p class="text-xs text-muted mt-1.5">Paste a Google Drive (or other) shareable link for each document. Rows with no link won't be saved.</p>
+      </div>
       <div class="sm:col-span-2 flex items-center gap-2">
         <input id="field-verified" type="checkbox" ${s.verified ? 'checked' : ''} class="rounded border-borderc text-forest focus:ring-forest" />
         <label for="field-verified" class="text-sm text-charcoal">Verified <span class="text-xs text-muted">(placeholder for the future CRM supplier-verification step)</span></label>
@@ -3210,6 +3266,7 @@ function readSupplierFormValues() {
     paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays,
     paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
     crmSupplierId: val('crmSupplierId'),
+    documents: readSupplierDocuments(),
     notes: val('notes'),
   };
 }
@@ -3240,6 +3297,7 @@ async function renderNewSupplierPage() {
     </form>`);
   refreshIcons();
   wirePaymentTermsField();
+  wireSupplierDocuments();
   wireCRMSupplierSearch();
   document.getElementById('supplier-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -3306,6 +3364,7 @@ async function renderEditSupplierPage(id) {
     </form>`);
   refreshIcons();
   wirePaymentTermsField();
+  wireSupplierDocuments(s);
   if (s.crmSupplierId) {
     document.getElementById('crm-resync-btn').addEventListener('click', async () => {
       const btn = document.getElementById('crm-resync-btn');
