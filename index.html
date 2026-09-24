@@ -750,6 +750,52 @@ function renderRoute() {
     renderARPaymentPage(arId);
     return;
   }
+  if (path.startsWith('finance/ap/payment/')) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const apId = path.substring('finance/ap/payment/'.length);
+    setActiveNav('finance/accounts-payable', NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Record Payment' });
+    renderAPPaymentPage(apId);
+    return;
+  }
+
+  // Dynamic Procurement routes (not in NAV — reached via buttons/links on the Procurement pages)
+  const procurementEditRoutes = [
+    { prefix: 'procurement/suppliers/edit/', fn: renderEditSupplierPage, highlight: 'procurement/suppliers', label: 'Edit Supplier' },
+    { prefix: 'procurement/purchase-requests/edit/', fn: renderEditPRPage, highlight: 'procurement/purchase-requests', label: 'Edit Purchase Request' },
+    { prefix: 'procurement/supplier-pos/edit/', fn: renderEditSupplierPOPage, highlight: 'procurement/supplier-pos', label: 'Edit Supplier PO' },
+  ];
+  for (const r of procurementEditRoutes) {
+    if (path.startsWith(r.prefix)) {
+      if (!canAccess('procurement')) { renderNoAccess('Procurement'); buildBreadcrumb(null, null); return; }
+      const id = path.substring(r.prefix.length);
+      setActiveNav(r.highlight, NAV.find(n => n.path === 'procurement'));
+      buildBreadcrumb(NAV.find(n => n.path === 'procurement'), { name: r.label });
+      r.fn(id);
+      return;
+    }
+  }
+  const procurementNewRoutes = {
+    'procurement/suppliers/new': { fn: renderNewSupplierPage, highlight: 'procurement/suppliers', label: 'New Supplier' },
+    'procurement/purchase-requests/new': { fn: renderNewPRPage, highlight: 'procurement/purchase-requests', label: 'New Purchase Request' },
+    'procurement/supplier-pos/new': { fn: renderNewSupplierPOPage, highlight: 'procurement/supplier-pos', label: 'New Supplier PO' },
+  };
+  if (procurementNewRoutes[path]) {
+    if (!canAccess('procurement')) { renderNoAccess('Procurement'); buildBreadcrumb(null, null); return; }
+    const r = procurementNewRoutes[path];
+    setActiveNav(r.highlight, NAV.find(n => n.path === 'procurement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'procurement'), { name: r.label });
+    r.fn();
+    return;
+  }
+  if (path === 'procurement/supplier-bills/new' || path.startsWith('procurement/supplier-bills/new/')) {
+    if (!canAccess('procurement')) { renderNoAccess('Procurement'); buildBreadcrumb(null, null); return; }
+    const prefillPOId = path === 'procurement/supplier-bills/new' ? null : path.substring('procurement/supplier-bills/new/'.length);
+    setActiveNav('procurement/supplier-bills', NAV.find(n => n.path === 'procurement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'procurement'), { name: 'New Supplier Bill' });
+    renderNewSupplierBillPage(prefillPOId);
+    return;
+  }
 
   const match = findNavByPath(path);
   if (!match) {
@@ -800,6 +846,20 @@ function renderRoute() {
   };
   if (financePages[path]) {
     financePages[path]();
+    return;
+  }
+
+  // Procurement module — real pages instead of placeholders
+  const procurementPages = {
+    'procurement/suppliers': renderSuppliersPage,
+    'procurement/purchase-requests': renderPurchaseRequestsPage,
+    'procurement/supplier-pos': renderSupplierPOsPage,
+    'procurement/receiving': renderReceivingPage,
+    'procurement/supplier-bills': renderSupplierBillsPage,
+    'procurement/supplier-payments': renderSupplierPaymentsPage,
+  };
+  if (procurementPages[path]) {
+    procurementPages[path]();
     return;
   }
 
@@ -940,6 +1000,13 @@ function statusBadgeClass(status) {
     'Ready for Billing': 'bg-forest/10 text-forest border-forest/30',
     'On Hold': 'bg-gray-100 text-gray-600 border-gray-300',
     'Cancelled': 'bg-red-50 text-red-600 border-red-200',
+    'Partially Received': 'bg-orange-50 text-orange-700 border-orange-200',
+    'Received': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Pending': 'bg-amber-50 text-amber-700 border-amber-200',
+    'Approved': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Rejected': 'bg-red-50 text-red-600 border-red-200',
+    'Active': 'bg-teal-50 text-teal-700 border-teal-200',
+    'Inactive': 'bg-gray-100 text-gray-600 border-gray-300',
   };
   return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
 }
@@ -2287,6 +2354,10 @@ async function renderARPaymentPage(id) {
 }
 
 /* ---- Accounts Payable ---- */
+function apStatusBadgeClass(status) {
+  const map = { 'Unpaid': 'bg-red-50 text-red-600 border-red-200', 'Partially Paid': 'bg-amber-50 text-amber-700 border-amber-200', 'Paid': 'bg-teal-50 text-teal-700 border-teal-200' };
+  return map[status] || 'bg-gray-50 text-gray-600 border-gray-200';
+}
 function apTableHtml(entries) {
   if (!entries.length) {
     return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
@@ -2298,7 +2369,7 @@ function apTableHtml(entries) {
     <div class="card overflow-x-auto">
       <table class="w-full text-sm">
         <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-          <th class="px-4 py-3">Payee</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Due Date</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          <th class="px-4 py-3">Payee</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Paid</th><th class="px-4 py-3">Balance</th><th class="px-4 py-3">Due Date</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
         </tr></thead>
         <tbody>
           ${entries.map(e => `
@@ -2307,42 +2378,22 @@ function apTableHtml(entries) {
               <td class="px-4 py-3">${e.referenceNumber || '—'}</td>
               <td class="px-4 py-3">${e.category || '—'}</td>
               <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
+              <td class="px-4 py-3">${formatCurrency(e.amountPaid)}</td>
+              <td class="px-4 py-3 font-medium">${formatCurrency(e.balance)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
-              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-red-50 text-red-600 border-red-200'}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<button data-mark-paid-ap="${e.id}" data-amount="${e.amount}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Paid</button>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${apStatusBadgeClass(e.status)}">${e.status}</span></td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/ap/payment/${e.id}" class="text-forest hover:underline text-xs font-medium">Record Payment</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
-}
-function wireApMarkPaid() {
-  document.querySelectorAll('[data-mark-paid-ap]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; btn.textContent = 'Updating...';
-      const id = btn.getAttribute('data-mark-paid-ap');
-      const amount = Number(btn.getAttribute('data-amount')) || 0;
-      try {
-        const datePaid = todayISO();
-        await updateFinanceDoc('accountsPayable', id, { status: 'Paid', datePaid });
-        await postGLEntries([
-          { date: datePaid, account: 'Accounts Payable', debit: amount, credit: 0, description: 'Accounts Payable settled', sourceType: 'ap-payment', sourceId: id },
-          { date: datePaid, account: 'Cash', debit: 0, credit: amount, description: 'Accounts Payable settled', sourceType: 'ap-payment', sourceId: id },
-        ]);
-        renderAccountsPayablePage();
-      } catch (e) {
-        console.error(e);
-        alert('Could not update this payable. Please try again.');
-        btn.disabled = false; btn.textContent = 'Mark Paid';
-      }
-    });
-  });
 }
 async function renderAccountsPayablePage() {
   contentWrap(`
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-xl font-semibold text-charcoal">Accounts Payable</h1>
-        <p class="text-sm text-muted mt-1">Amounts owed to suppliers/vendors. Manual entry for now.</p>
+        <p class="text-sm text-muted mt-1">Amounts owed to suppliers/vendors. Auto-created from Supplier Bills; manual entries also supported.</p>
       </div>
       <a href="#/finance/ap/new" class="btn-primary text-sm">+ New Payable</a>
     </div>
@@ -2352,7 +2403,6 @@ async function renderAccountsPayablePage() {
     const entries = await fetchFinanceCollection('accountsPayable');
     document.getElementById('ap-list-container').innerHTML = apTableHtml(entries);
     refreshIcons();
-    wireApMarkPaid();
   } catch (e) {
     console.error(e);
     document.getElementById('ap-list-container').innerHTML = poLoadErrorHtml();
@@ -2362,7 +2412,7 @@ async function renderNewAPEntryPage() {
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Payable</h1>
-      <p class="text-sm text-muted mt-1">Recording this posts Dr [Category] / Cr Accounts Payable to the General Ledger immediately.</p>
+      <p class="text-sm text-muted mt-1">For payables with no formal Supplier Bill (e.g. rent, utilities). Recording this posts Dr [Category] / Cr Accounts Payable to the General Ledger immediately.</p>
     </div>
     <form id="ap-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="ap-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
@@ -2396,7 +2446,7 @@ async function renderNewAPEntryPage() {
     }
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
-      const ref = await createFinanceDoc('accountsPayable', { payee, referenceNumber, category, amount, dateReceived, dueDate, description, status: 'Unpaid' });
+      const ref = await createFinanceDoc('accountsPayable', { source: 'manual', payee, referenceNumber, category, amount, amountPaid: 0, balance: amount, status: 'Unpaid', payments: [], dateReceived, dueDate, description });
       await postGLEntries([
         { date: dateReceived, account: category, debit: amount, credit: 0, description: `Payable — ${payee}${referenceNumber ? ' (' + referenceNumber + ')' : ''}`, sourceType: 'accounts-payable', sourceId: ref.id },
         { date: dateReceived, account: 'Accounts Payable', debit: 0, credit: amount, description: `Payable — ${payee}${referenceNumber ? ' (' + referenceNumber + ')' : ''}`, sourceType: 'accounts-payable', sourceId: ref.id },
@@ -2407,6 +2457,92 @@ async function renderNewAPEntryPage() {
       errBox.textContent = 'Could not save this payable. Please try again.';
       errBox.classList.remove('hidden');
       btn.disabled = false; btnText.textContent = 'Save Payable';
+    }
+  });
+}
+async function renderAPPaymentPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let ap;
+  try {
+    ap = await fetchFinanceDoc('accountsPayable', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!ap) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Entry not found.</p><a href="#/finance/accounts-payable" class="mt-4 text-sm text-forest hover:underline">Back to Accounts Payable</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Record Payment</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(ap.payee)}${ap.referenceNumber ? ' — ' + escapeAttr(ap.referenceNumber) : ''}</p>
+    </div>
+    <div class="card p-6 max-w-2xl mb-6">
+      <div class="grid grid-cols-3 gap-4 text-sm">
+        <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ap.amount)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Paid So Far</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ap.amountPaid)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Balance</p><p class="font-semibold text-forest mt-1">${formatCurrency(ap.balance)}</p></div>
+      </div>
+    </div>
+    <form id="pay-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${numberField('payAmount', 'Payment Amount (₱)', { required: true, step: '0.01', value: ap.balance })}
+        ${dateField('payDate', 'Payment Date', { required: true, value: todayISO() })}
+        ${selectField('payMethod', 'Payment Method', PAYMENT_METHODS, { required: true, value: 'Cash' })}
+        ${textField('payNotes', 'Notes / Reference')}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="pay-form-submit" type="submit" class="btn-primary"><span id="pay-form-submit-text">Record Payment</span></button>
+        <a href="#/finance/accounts-payable" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('pay-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('pay-form-submit');
+    const btnText = document.getElementById('pay-form-submit-text');
+    const errBox = document.getElementById('pay-form-error');
+    errBox.classList.add('hidden');
+    const payAmount = Number(document.getElementById('field-payAmount').value) || 0;
+    const payDate = document.getElementById('field-payDate').value;
+    const payMethod = document.getElementById('field-payMethod').value;
+    const payNotes = document.getElementById('field-payNotes').value.trim();
+
+    if (!payAmount || payAmount <= 0 || !payDate) {
+      errBox.textContent = 'Enter a valid payment amount and date.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (payAmount > ap.balance + 0.01) {
+      errBox.textContent = `Payment cannot exceed the outstanding balance of ${formatCurrency(ap.balance)}.`;
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const newAmountPaid = Number((ap.amountPaid + payAmount).toFixed(2));
+      const newBalance = Number((ap.amount - newAmountPaid).toFixed(2));
+      const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
+      const payments = Array.isArray(ap.payments) ? [...ap.payments] : [];
+      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, recordedBy: currentUser ? currentUser.email : null });
+
+      await updateFinanceDoc('accountsPayable', id, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
+      await postGLEntries([
+        { date: payDate, account: 'Accounts Payable', debit: payAmount, credit: 0, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id },
+        { date: payDate, account: 'Cash', debit: 0, credit: payAmount, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id },
+      ]);
+      navigateTo('finance/accounts-payable');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not record this payment. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Record Payment';
     }
   });
 }
@@ -2877,6 +3013,915 @@ async function renderGeneralLedgerPage() {
   renderFiltered();
   document.getElementById('gl-search').addEventListener('input', renderFiltered);
   document.getElementById('gl-account').addEventListener('change', renderFiltered);
+}
+
+/* ==========================================================================
+   PROCUREMENT MODULE  (Firestore-backed: suppliers, purchaseRequests,
+   supplierPOs, supplierBills — Supplier Bills posts into accountsPayable)
+   ========================================================================== */
+const SUPPLIER_CATEGORIES = ['Materials', 'Equipment', 'Services', 'Subcontractor', 'Other'];
+const SUPPLIER_STATUSES = ['Active', 'Inactive'];
+const PR_STATUSES = ['Pending', 'Approved', 'Rejected'];
+const SUPPLIER_PO_STATUSES = ['Open', 'Partially Received', 'Received', 'On Hold', 'Cancelled'];
+const SUPPLIER_PO_OPEN_STATUSES = ['Open'];
+const SUPPLIER_PO_RECEIVING_STATUSES = ['Open', 'Partially Received', 'Received'];
+const SUPPLIER_PO_OPEN_QUICK_STATUSES = ['Open', 'On Hold', 'Cancelled'];
+const SUPPLIER_PO_RECEIVING_QUICK_STATUSES = ['Open', 'Partially Received', 'Received', 'On Hold', 'Cancelled'];
+
+/* ---- Shared pickers ---- */
+function supplierSelectHtml(suppliers, selectedId, opts = {}) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Supplier${opts.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <select id="field-supplierId" ${opts.required ? 'required' : ''} class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">Select...</option>
+        ${suppliers.map(s => `<option value="${s.id}" ${s.id === selectedId ? 'selected' : ''}>${escapeAttr(s.name)}</option>`).join('')}
+      </select>
+    </div>`;
+}
+function prSelectHtml(prs, selectedId) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Linked Purchase Request (optional)</label>
+      <select id="field-prId" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">None</option>
+        ${prs.map(p => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeAttr(p.prNumber)} — ${escapeAttr(p.supplierName || 'No supplier set')}</option>`).join('')}
+      </select>
+    </div>`;
+}
+
+/* ---- Suppliers ---- */
+function supplierTableHtml(suppliers) {
+  if (!suppliers.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No suppliers recorded yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Contact Person</th><th class="px-4 py-3">Phone</th><th class="px-4 py-3">Payment Terms</th><th class="px-4 py-3">Verified</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${suppliers.map(s => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${s.name || '—'}</td>
+              <td class="px-4 py-3">${s.category || '—'}</td>
+              <td class="px-4 py-3">${s.contactPerson || '—'}</td>
+              <td class="px-4 py-3">${s.phone || '—'}</td>
+              <td class="px-4 py-3">${s.paymentTerms || '—'}</td>
+              <td class="px-4 py-3">${s.verified ? `<span class="inline-flex items-center gap-1 text-forest text-xs font-medium">${icon('check-circle', 'w-3.5 h-3.5')} Verified</span>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3">${statusBadge(s.status)}</td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/suppliers/edit/${s.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function renderSuppliersPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Suppliers</h1>
+        <p class="text-sm text-muted mt-1">Supplier master records.</p>
+      </div>
+      <a href="#/procurement/suppliers/new" class="btn-primary text-sm">+ New Supplier</a>
+    </div>
+    <div id="supplier-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const suppliers = await fetchFinanceCollection('suppliers');
+    document.getElementById('supplier-list-container').innerHTML = supplierTableHtml(suppliers);
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('supplier-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+function supplierFormFieldsHtml(s = {}) {
+  return `
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      ${textField('name', 'Supplier Name', { required: true, value: s.name })}
+      ${selectField('category', 'Category', SUPPLIER_CATEGORIES, { required: true, value: s.category })}
+      ${textField('contactPerson', 'Contact Person', { value: s.contactPerson })}
+      ${textField('phone', 'Phone', { value: s.phone })}
+      ${textField('email', 'Email', { value: s.email })}
+      ${selectField('status', 'Status', SUPPLIER_STATUSES, { value: s.status || 'Active' })}
+      ${textareaField('address', 'Address', { span2: true, value: s.address })}
+      ${paymentTermsFieldHtml({ type: s.paymentTermsType, advanceAmount: s.advancePaymentAmount, days: s.paymentTermsDays, customDays: s.customPaymentDays })}
+      <div class="sm:col-span-2 flex items-center gap-2">
+        <input id="field-verified" type="checkbox" ${s.verified ? 'checked' : ''} class="rounded border-borderc text-forest focus:ring-forest" />
+        <label for="field-verified" class="text-sm text-charcoal">Verified <span class="text-xs text-muted">(placeholder for the future CRM supplier-verification step)</span></label>
+      </div>
+      ${textareaField('notes', 'Notes', { span2: true, value: s.notes })}
+    </div>`;
+}
+function readSupplierFormValues() {
+  const val = (id) => { const el = document.getElementById('field-' + id); return el ? el.value.trim() : ''; };
+  const paymentTermsType = val('paymentTermsType');
+  const advancePaymentAmount = val('advancePaymentAmount') ? Number(val('advancePaymentAmount')) : null;
+  const paymentTermsDays = val('paymentTermsDays');
+  const customPaymentDays = val('customPaymentDays') ? Number(val('customPaymentDays')) : null;
+  return {
+    name: val('name'),
+    category: val('category'),
+    contactPerson: val('contactPerson'),
+    phone: val('phone'),
+    email: val('email'),
+    address: val('address'),
+    status: val('status') || 'Active',
+    verified: document.getElementById('field-verified')?.checked || false,
+    paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays,
+    paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
+    notes: val('notes'),
+  };
+}
+async function renderNewSupplierPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Supplier</h1>
+    </div>
+    <form id="supplier-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="supplier-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      ${supplierFormFieldsHtml()}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="supplier-form-submit" type="submit" class="btn-primary"><span id="supplier-form-submit-text">Save Supplier</span></button>
+        <a href="#/procurement/suppliers" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  wirePaymentTermsField();
+  document.getElementById('supplier-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('supplier-form-submit');
+    const btnText = document.getElementById('supplier-form-submit-text');
+    const errBox = document.getElementById('supplier-form-error');
+    errBox.classList.add('hidden');
+    const data = readSupplierFormValues();
+    if (!data.name || !data.category) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('suppliers', data);
+      navigateTo('procurement/suppliers');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this supplier. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Supplier';
+    }
+  });
+}
+async function renderEditSupplierPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let s;
+  try {
+    s = await fetchFinanceDoc('suppliers', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!s) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Supplier not found.</p><a href="#/procurement/suppliers" class="mt-4 text-sm text-forest hover:underline">Back to Suppliers</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Edit Supplier</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(s.name)}</p>
+    </div>
+    <form id="supplier-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="supplier-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      ${supplierFormFieldsHtml(s)}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="supplier-form-submit" type="submit" class="btn-primary"><span id="supplier-form-submit-text">Save Changes</span></button>
+        <a href="#/procurement/suppliers" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  wirePaymentTermsField();
+  document.getElementById('supplier-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('supplier-form-submit');
+    const btnText = document.getElementById('supplier-form-submit-text');
+    const errBox = document.getElementById('supplier-form-error');
+    errBox.classList.add('hidden');
+    const data = readSupplierFormValues();
+    if (!data.name || !data.category) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('suppliers', id, data);
+      navigateTo('procurement/suppliers');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save changes. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Changes';
+    }
+  });
+}
+
+/* ---- Purchase Requests ---- */
+function prTableHtml(prs) {
+  if (!prs.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No purchase requests yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">PR #</th><th class="px-4 py-3">Requested By</th><th class="px-4 py-3">Department</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Est. Cost</th><th class="px-4 py-3">Supplier</th><th class="px-4 py-3">Priority</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${prs.map(p => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${p.prNumber || '—'}</td>
+              <td class="px-4 py-3">${p.requestedBy || '—'}</td>
+              <td class="px-4 py-3">${p.department || '—'}</td>
+              <td class="px-4 py-3">${formatDate(p.dateRequested)}</td>
+              <td class="px-4 py-3">${formatCurrency(p.estimatedCost)}</td>
+              <td class="px-4 py-3">${p.supplierName || '—'}</td>
+              <td class="px-4 py-3">${p.priority === 'Urgent' ? '<span class="text-red-600 font-medium">Urgent</span>' : 'Normal'}</td>
+              <td class="px-4 py-3">
+                <select data-quick-pr-status="${p.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                  ${PR_STATUSES.map(st => `<option value="${st}" ${p.status === st ? 'selected' : ''}>${st}</option>`).join('')}
+                </select>
+              </td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/purchase-requests/edit/${p.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireQuickPRStatus(reload) {
+  document.querySelectorAll('[data-quick-pr-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.getAttribute('data-quick-pr-status');
+      sel.disabled = true;
+      try {
+        await updateFinanceDoc('purchaseRequests', id, { status: sel.value });
+        await reload();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update status. Please try again.');
+        sel.disabled = false;
+      }
+    });
+  });
+}
+async function renderPurchaseRequestsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Purchase Requests</h1>
+        <p class="text-sm text-muted mt-1">Internal requests to procure goods or services. Optional step before a Supplier PO.</p>
+      </div>
+      <a href="#/procurement/purchase-requests/new" class="btn-primary text-sm">+ New Purchase Request</a>
+    </div>
+    <div id="pr-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const prs = await fetchFinanceCollection('purchaseRequests');
+    document.getElementById('pr-list-container').innerHTML = prTableHtml(prs);
+    refreshIcons();
+    wireQuickPRStatus(renderPurchaseRequestsPage);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('pr-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderNewPRPage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let suppliers = [];
+  try {
+    suppliers = await fetchFinanceCollection('suppliers');
+  } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Purchase Request</h1>
+    </div>
+    <form id="pr-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="pr-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('prNumber', 'PR Number', { required: true })}
+        ${textField('requestedBy', 'Requested By', { required: true })}
+        ${textField('department', 'Department')}
+        ${dateField('dateRequested', 'Date Requested', { required: true, value: todayISO() })}
+        ${numberField('estimatedCost', 'Estimated Cost (₱)', { required: true, step: '0.01' })}
+        ${selectField('priority', 'Priority', PO_PRIORITIES, { value: 'Normal' })}
+        ${supplierSelectHtml(suppliers, null)}
+        ${textareaField('itemsNeeded', 'Items Needed', { span2: true, required: true })}
+        ${textareaField('notes', 'Notes', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="pr-form-submit" type="submit" class="btn-primary"><span id="pr-form-submit-text">Save Purchase Request</span></button>
+        <a href="#/procurement/purchase-requests" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('pr-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('pr-form-submit');
+    const btnText = document.getElementById('pr-form-submit-text');
+    const errBox = document.getElementById('pr-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const prNumber = val('prNumber'), requestedBy = val('requestedBy'), department = val('department'),
+      dateRequested = val('dateRequested'), estimatedCost = Number(val('estimatedCost')) || 0,
+      priority = val('priority') || 'Normal', itemsNeeded = val('itemsNeeded'), notes = val('notes');
+    const supplierSel = document.getElementById('field-supplierId');
+    const supplierId = supplierSel.value;
+    const supplierName = supplierId ? supplierSel.options[supplierSel.selectedIndex].text : '';
+
+    if (!prNumber || !requestedBy || !dateRequested || !estimatedCost || !itemsNeeded) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('purchaseRequests', { prNumber, requestedBy, department, dateRequested, estimatedCost, priority, supplierId, supplierName, itemsNeeded, notes, status: 'Pending' });
+      navigateTo('procurement/purchase-requests');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this request. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Purchase Request';
+    }
+  });
+}
+async function renderEditPRPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let pr, suppliers = [];
+  try {
+    const [prData, allSuppliers] = await Promise.all([fetchFinanceDoc('purchaseRequests', id), fetchFinanceCollection('suppliers')]);
+    pr = prData; suppliers = allSuppliers;
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!pr) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Purchase Request not found.</p><a href="#/procurement/purchase-requests" class="mt-4 text-sm text-forest hover:underline">Back to Purchase Requests</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Edit Purchase Request</h1>
+        <p class="text-sm text-muted mt-1">${escapeAttr(pr.prNumber)}</p>
+      </div>
+      ${statusBadge(pr.status)}
+    </div>
+    <form id="pr-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="pr-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('prNumber', 'PR Number', { required: true, value: pr.prNumber })}
+        ${textField('requestedBy', 'Requested By', { required: true, value: pr.requestedBy })}
+        ${textField('department', 'Department', { value: pr.department })}
+        ${dateField('dateRequested', 'Date Requested', { required: true, value: pr.dateRequested })}
+        ${numberField('estimatedCost', 'Estimated Cost (₱)', { required: true, step: '0.01', value: pr.estimatedCost })}
+        ${selectField('priority', 'Priority', PO_PRIORITIES, { value: pr.priority || 'Normal' })}
+        ${supplierSelectHtml(suppliers, pr.supplierId)}
+        ${selectField('status', 'Status', PR_STATUSES, { required: true, value: pr.status })}
+        ${textareaField('itemsNeeded', 'Items Needed', { span2: true, required: true, value: pr.itemsNeeded })}
+        ${textareaField('notes', 'Notes', { span2: true, value: pr.notes })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="pr-form-submit" type="submit" class="btn-primary"><span id="pr-form-submit-text">Save Changes</span></button>
+        <a href="#/procurement/purchase-requests" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('pr-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('pr-form-submit');
+    const btnText = document.getElementById('pr-form-submit-text');
+    const errBox = document.getElementById('pr-form-error');
+    errBox.classList.add('hidden');
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const prNumber = val('prNumber'), requestedBy = val('requestedBy'), department = val('department'),
+      dateRequested = val('dateRequested'), estimatedCost = Number(val('estimatedCost')) || 0,
+      priority = val('priority') || 'Normal', status = val('status'), itemsNeeded = val('itemsNeeded'), notes = val('notes');
+    const supplierSel = document.getElementById('field-supplierId');
+    const supplierId = supplierSel.value;
+    const supplierName = supplierId ? supplierSel.options[supplierSel.selectedIndex].text : '';
+
+    if (!prNumber || !requestedBy || !dateRequested || !estimatedCost || !itemsNeeded) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('purchaseRequests', id, { prNumber, requestedBy, department, dateRequested, estimatedCost, priority, supplierId, supplierName, itemsNeeded, notes, status });
+      navigateTo('procurement/purchase-requests');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save changes. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Changes';
+    }
+  });
+}
+
+/* ---- Supplier POs + Receiving ---- */
+function supplierPOTableHtml(pos, opts = {}) {
+  if (!pos.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">${opts.emptyMessage || 'No supplier purchase orders found.'}</p>
+    </div>`;
+  }
+  const quickStatuses = opts.quickStatuses || null;
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Supplier PO #</th><th class="px-4 py-3">Supplier</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Issued</th><th class="px-4 py-3">Expected Delivery</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${pos.map(po => `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${po.supplierPONumber || '—'}${po.billed ? `<div class="mt-0.5"><span class="inline-flex items-center gap-1 text-[10px] font-medium text-forest">${icon('check-circle', 'w-3 h-3')} Billed</span></div>` : ''}</td>
+              <td class="px-4 py-3">${po.supplierName || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+              <td class="px-4 py-3">${formatDate(po.dateIssued)}</td>
+              <td class="px-4 py-3">${formatDate(po.expectedDeliveryDate)}</td>
+              <td class="px-4 py-3">
+                ${quickStatuses ? `
+                  <select data-quick-supplier-po-status="${po.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                    ${quickStatuses.map(s => `<option value="${s}" ${po.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+                  </select>
+                ` : statusBadge(po.status)}
+              </td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-pos/edit/${po.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireQuickSupplierPOStatus(reload) {
+  document.querySelectorAll('[data-quick-supplier-po-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.getAttribute('data-quick-supplier-po-status');
+      sel.disabled = true;
+      try {
+        await updateFinanceDoc('supplierPOs', id, { status: sel.value });
+        await reload();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update status. Please try again.');
+        sel.disabled = false;
+      }
+    });
+  });
+}
+async function renderSupplierPOsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Supplier POs</h1>
+        <p class="text-sm text-muted mt-1">Purchase orders issued to suppliers, not yet received.</p>
+      </div>
+      <a href="#/procurement/supplier-pos/new" class="btn-primary text-sm">+ New Supplier PO</a>
+    </div>
+    <div id="supplier-po-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const all = await fetchFinanceCollection('supplierPOs');
+    const pos = all.filter(p => SUPPLIER_PO_OPEN_STATUSES.includes(p.status));
+    document.getElementById('supplier-po-list-container').innerHTML = supplierPOTableHtml(pos, {
+      emptyMessage: 'No open supplier POs yet.',
+      quickStatuses: SUPPLIER_PO_OPEN_QUICK_STATUSES,
+    });
+    refreshIcons();
+    wireQuickSupplierPOStatus(renderSupplierPOsPage);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('supplier-po-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+async function renderReceivingPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Receiving</h1>
+      <p class="text-sm text-muted mt-1">Track receipt of goods/services against supplier POs. Update status as items arrive — use Edit for receiving notes and partial details.</p>
+    </div>
+    <div id="supplier-po-list-container" class="text-sm text-muted">Loading...</div>`);
+  try {
+    const all = await fetchFinanceCollection('supplierPOs');
+    const pos = all.filter(p => SUPPLIER_PO_RECEIVING_STATUSES.includes(p.status));
+    document.getElementById('supplier-po-list-container').innerHTML = supplierPOTableHtml(pos, {
+      emptyMessage: 'No supplier POs currently being received.',
+      quickStatuses: SUPPLIER_PO_RECEIVING_QUICK_STATUSES,
+    });
+    refreshIcons();
+    wireQuickSupplierPOStatus(renderReceivingPage);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('supplier-po-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+function readSupplierPOFormValues() {
+  const val = (id) => { const el = document.getElementById('field-' + id); return el ? el.value.trim() : ''; };
+  const paymentTermsType = val('paymentTermsType');
+  const advancePaymentAmount = val('advancePaymentAmount') ? Number(val('advancePaymentAmount')) : null;
+  const paymentTermsDays = val('paymentTermsDays');
+  const customPaymentDays = val('customPaymentDays') ? Number(val('customPaymentDays')) : null;
+  const supplierSel = document.getElementById('field-supplierId');
+  const supplierId = supplierSel ? supplierSel.value : '';
+  const supplierName = supplierSel && supplierId ? supplierSel.options[supplierSel.selectedIndex].text : '';
+  const prSel = document.getElementById('field-prId');
+  const prId = prSel ? prSel.value : '';
+  const prNumber = prSel && prId ? prSel.options[prSel.selectedIndex].text.split(' — ')[0] : '';
+  return {
+    supplierPONumber: val('supplierPONumber'),
+    supplierId, supplierName, prId, prNumber,
+    itemsDescription: val('itemsDescription'),
+    poAmount: Number(val('poAmount')) || 0,
+    dateIssued: val('dateIssued'),
+    expectedDeliveryDate: val('expectedDeliveryDate'),
+    paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays,
+    paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
+    notes: val('notes'),
+  };
+}
+async function renderNewSupplierPOPage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let suppliers = [], prs = [];
+  try {
+    const [allSuppliers, allPRs] = await Promise.all([fetchFinanceCollection('suppliers'), fetchFinanceCollection('purchaseRequests')]);
+    suppliers = allSuppliers;
+    prs = allPRs.filter(p => p.status === 'Approved');
+  } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Supplier PO</h1>
+      <p class="text-sm text-muted mt-1">Status starts as <span class="font-medium text-charcoal">Open</span>.</p>
+    </div>
+    <form id="supplier-po-form" class="card p-6 space-y-6 max-w-4xl">
+      <div id="supplier-po-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('supplierPONumber', 'Supplier PO Number', { required: true })}
+          ${supplierSelectHtml(suppliers, null, { required: true })}
+          ${prSelectHtml(prs, null)}
+          ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01' })}
+          ${dateField('dateIssued', 'Date Issued', { required: true, value: todayISO() })}
+          ${dateField('expectedDeliveryDate', 'Expected Delivery Date')}
+          ${textareaField('itemsDescription', 'Items / Description', { span2: true })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Payment Terms</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${paymentTermsFieldHtml()}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
+        <div class="grid grid-cols-1 gap-4">
+          ${textareaField('notes', 'Notes')}
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="supplier-po-form-submit" type="submit" class="btn-primary"><span id="supplier-po-form-submit-text">Save Supplier PO</span></button>
+        <a href="#/procurement/supplier-pos" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  wirePaymentTermsField();
+  document.getElementById('supplier-po-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('supplier-po-form-submit');
+    const btnText = document.getElementById('supplier-po-form-submit-text');
+    const errBox = document.getElementById('supplier-po-form-error');
+    errBox.classList.add('hidden');
+
+    const data = readSupplierPOFormValues();
+    if (!data.supplierPONumber || !data.supplierId || !data.poAmount || !data.dateIssued) {
+      errBox.textContent = 'Please fill in all required fields (marked with *).';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      data.status = 'Open';
+      data.billed = false;
+      await createFinanceDoc('supplierPOs', data);
+      navigateTo('procurement/supplier-pos');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this Supplier PO. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Supplier PO';
+    }
+  });
+}
+async function renderEditSupplierPOPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let po, suppliers = [], prs = [];
+  try {
+    const [poData, allSuppliers, allPRs] = await Promise.all([fetchFinanceDoc('supplierPOs', id), fetchFinanceCollection('suppliers'), fetchFinanceCollection('purchaseRequests')]);
+    po = poData; suppliers = allSuppliers; prs = allPRs.filter(p => p.status === 'Approved');
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!po) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Supplier PO not found.</p><a href="#/procurement/supplier-pos" class="mt-4 text-sm text-forest hover:underline">Back to Supplier POs</a></div>`);
+    return;
+  }
+
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Edit Supplier PO</h1>
+        <p class="text-sm text-muted mt-1">${escapeAttr(po.supplierPONumber)} — ${escapeAttr(po.supplierName)}</p>
+      </div>
+      ${statusBadge(po.status)}
+    </div>
+    <form id="supplier-po-form" class="card p-6 space-y-6 max-w-4xl">
+      <div id="supplier-po-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${textField('supplierPONumber', 'Supplier PO Number', { required: true, value: po.supplierPONumber })}
+          ${supplierSelectHtml(suppliers, po.supplierId, { required: true })}
+          ${prSelectHtml(prs, po.prId)}
+          ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01', value: po.poAmount })}
+          ${dateField('dateIssued', 'Date Issued', { required: true, value: po.dateIssued })}
+          ${dateField('expectedDeliveryDate', 'Expected Delivery Date', { value: po.expectedDeliveryDate })}
+          ${textareaField('itemsDescription', 'Items / Description', { span2: true, value: po.itemsDescription })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Payment Terms</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Status & Receiving</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${selectField('status', 'Status', SUPPLIER_PO_STATUSES, { required: true, value: po.status })}
+          ${textField('datesReceived', 'Date(s) Received', { value: po.datesReceived, placeholder: 'e.g. 12 Sep 2026 (partial), 20 Sep 2026 (final)' })}
+          ${textareaField('receivingNotes', 'Receiving Notes', { span2: true, value: po.receivingNotes })}
+          ${textareaField('partialReceivingDetails', 'Partial Receiving Details', { span2: true, value: po.partialReceivingDetails, hint: 'What has been received so far vs. what is pending.' })}
+        </div>
+      </div>
+
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal mb-3">Other</h2>
+        <div class="grid grid-cols-1 gap-4">
+          ${textareaField('notes', 'Notes', { value: po.notes })}
+        </div>
+      </div>
+
+      ${po.billed ? `<div class="flex items-center gap-1.5 text-xs font-medium text-forest">${icon('check-circle', 'w-3.5 h-3.5')} A Supplier Bill has already been created against this PO.</div>` : ''}
+
+      <div class="flex items-center gap-3">
+        <button id="supplier-po-form-submit" type="submit" class="btn-primary"><span id="supplier-po-form-submit-text">Save Changes</span></button>
+        <a href="#/procurement/supplier-pos" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  wirePaymentTermsField();
+  document.getElementById('supplier-po-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('supplier-po-form-submit');
+    const btnText = document.getElementById('supplier-po-form-submit-text');
+    const errBox = document.getElementById('supplier-po-form-error');
+    errBox.classList.add('hidden');
+
+    const data = readSupplierPOFormValues();
+    data.status = document.getElementById('field-status').value;
+    data.datesReceived = document.getElementById('field-datesReceived').value.trim();
+    data.receivingNotes = document.getElementById('field-receivingNotes').value.trim();
+    data.partialReceivingDetails = document.getElementById('field-partialReceivingDetails').value.trim();
+
+    if (!data.supplierPONumber || !data.supplierId || !data.poAmount || !data.dateIssued) {
+      errBox.textContent = 'Please fill in all required fields (marked with *).';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('supplierPOs', id, data);
+      const dest = SUPPLIER_PO_OPEN_STATUSES.includes(data.status) ? 'procurement/supplier-pos' : 'procurement/receiving';
+      navigateTo(dest);
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save changes. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Changes';
+    }
+  });
+}
+
+/* ---- Supplier Bills (bridge into Accounts Payable) ---- */
+async function renderSupplierBillsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Supplier Bills</h1>
+        <p class="text-sm text-muted mt-1">Received supplier POs not yet billed appear below. Creating a bill posts to Accounts Payable automatically.</p>
+      </div>
+      <a href="#/procurement/supplier-bills/new" class="btn-primary text-sm">+ New Supplier Bill</a>
+    </div>
+    <div id="sb-eligible-container" class="text-sm text-muted mb-8">Loading...</div>
+    <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Bills</h2>
+    <div id="sb-recent-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const [allPOs, bills] = await Promise.all([fetchFinanceCollection('supplierPOs'), fetchFinanceCollection('supplierBills')]);
+    const eligible = allPOs.filter(p => p.status === 'Received' && !p.billed);
+
+    document.getElementById('sb-eligible-container').innerHTML = eligible.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Supplier PO #</th><th class="px-4 py-3">Supplier</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Received</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${eligible.map(po => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${po.supplierPONumber || '—'}</td>
+                <td class="px-4 py-3">${po.supplierName || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+                <td class="px-4 py-3">${po.datesReceived || '—'}</td>
+                <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-bills/new/${po.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Create Bill</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No received supplier POs awaiting a bill.</div>`;
+
+    document.getElementById('sb-recent-container').innerHTML = bills.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Bill #</th><th class="px-4 py-3">Supplier</th><th class="px-4 py-3">Supplier PO</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Bill Date</th><th class="px-4 py-3">Due Date</th>
+          </tr></thead>
+          <tbody>
+            ${bills.slice(0, 15).map(b => `
+              <tr class="border-b border-borderc last:border-0">
+                <td class="px-4 py-3 font-medium text-charcoal">${b.billNumber || '—'}</td>
+                <td class="px-4 py-3">${b.supplierName || '—'}</td>
+                <td class="px-4 py-3">${b.supplierPONumber || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(b.amount)}</td>
+                <td class="px-4 py-3">${formatDate(b.billDate)}</td>
+                <td class="px-4 py-3">${formatDate(b.dueDate)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No supplier bills recorded yet.</div>`;
+
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('sb-eligible-container').innerHTML = poLoadErrorHtml();
+    document.getElementById('sb-recent-container').innerHTML = '';
+  }
+}
+async function renderNewSupplierBillPage(prefillPOId) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let suppliers = [], eligiblePOs = [], prefillPO = null;
+  try {
+    const [allSuppliers, allPOs] = await Promise.all([fetchFinanceCollection('suppliers'), fetchFinanceCollection('supplierPOs')]);
+    suppliers = allSuppliers;
+    eligiblePOs = allPOs.filter(p => p.status === 'Received' && !p.billed);
+    if (prefillPOId) prefillPO = allPOs.find(p => p.id === prefillPOId) || null;
+  } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Supplier Bill</h1>
+      <p class="text-sm text-muted mt-1">Recording this posts Dr [Category] / Cr Accounts Payable to the General Ledger immediately.</p>
+    </div>
+    <form id="sb-form" class="card p-6 space-y-4 max-w-3xl">
+      <div id="sb-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('billNumber', 'Bill Number', { required: true, hint: 'The bill/invoice number the supplier issued.' })}
+        ${supplierSelectHtml(suppliers, prefillPO ? prefillPO.supplierId : null, { required: true })}
+        <div>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">Linked Supplier PO (optional)</label>
+          <select id="field-supplierPOId" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+            <option value="">None</option>
+            ${eligiblePOs.map(po => `<option value="${po.id}" ${prefillPO && po.id === prefillPO.id ? 'selected' : ''}>${escapeAttr(po.supplierPONumber)} — ${escapeAttr(po.supplierName)}</option>`).join('')}
+          </select>
+        </div>
+        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01', value: prefillPO ? prefillPO.poAmount : '' })}
+        ${dateField('billDate', 'Bill Date', { required: true, value: todayISO() })}
+        ${dateField('dueDate', 'Due Date')}
+        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true })}
+        ${textareaField('notes', 'Notes', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="sb-form-submit" type="submit" class="btn-primary"><span id="sb-form-submit-text">Save Supplier Bill</span></button>
+        <a href="#/procurement/supplier-bills" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+
+  document.getElementById('sb-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('sb-form-submit');
+    const btnText = document.getElementById('sb-form-submit-text');
+    const errBox = document.getElementById('sb-form-error');
+    errBox.classList.add('hidden');
+
+    const val = (id) => document.getElementById('field-' + id).value.trim();
+    const billNumber = val('billNumber');
+    const supplierSel = document.getElementById('field-supplierId');
+    const supplierId = supplierSel.value;
+    const supplierName = supplierId ? supplierSel.options[supplierSel.selectedIndex].text : '';
+    const poSel = document.getElementById('field-supplierPOId');
+    const supplierPOId = poSel.value;
+    const supplierPONumber = supplierPOId ? poSel.options[poSel.selectedIndex].text.split(' — ')[0] : '';
+    const amount = Number(val('amount')) || 0;
+    const billDate = val('billDate'), dueDate = val('dueDate'), category = val('category'), notes = val('notes');
+
+    if (!billNumber || !supplierId || !amount || !billDate || !category) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      const billRef = await createFinanceDoc('supplierBills', { billNumber, supplierId, supplierName, supplierPOId, supplierPONumber, amount, billDate, dueDate, category, notes });
+
+      await createFinanceDoc('accountsPayable', {
+        source: 'supplier-bill', billId: billRef.id, supplierId, supplierPOId,
+        payee: supplierName, referenceNumber: billNumber, category,
+        amount, amountPaid: 0, balance: amount, status: 'Unpaid', payments: [],
+        dateReceived: billDate, dueDate, description: `Supplier Bill — ${billNumber}`,
+      });
+
+      await postGLEntries([
+        { date: billDate, account: category, debit: amount, credit: 0, description: `Supplier Bill — ${billNumber} (${supplierName})`, sourceType: 'supplier-bill', sourceId: billRef.id },
+        { date: billDate, account: 'Accounts Payable', debit: 0, credit: amount, description: `Supplier Bill — ${billNumber} (${supplierName})`, sourceType: 'supplier-bill', sourceId: billRef.id },
+      ]);
+
+      if (supplierPOId) {
+        await updateFinanceDoc('supplierPOs', supplierPOId, { billed: true, billId: billRef.id });
+      }
+
+      navigateTo('procurement/supplier-bills');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save this bill. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Supplier Bill';
+    }
+  });
+}
+
+/* ---- Supplier Payments (Accounts Payable entries sourced from Supplier Bills) ---- */
+async function renderSupplierPaymentsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Supplier Payments</h1>
+      <p class="text-sm text-muted mt-1">Payables created from Supplier Bills. Partial payments supported.</p>
+    </div>
+    <div id="sp-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const all = await fetchFinanceCollection('accountsPayable');
+    const entries = all.filter(e => e.source === 'supplier-bill');
+    document.getElementById('sp-list-container').innerHTML = apTableHtml(entries);
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('sp-list-container').innerHTML = poLoadErrorHtml();
+  }
 }
 
 /* ==========================================================================
