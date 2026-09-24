@@ -52,6 +52,47 @@
   @keyframes fadeIn { from { opacity:0; transform: translateY(2px);} to {opacity:1; transform:translateY(0);} }
   [data-page]:not(.active-page) { display:none; }
 
+  /* Card + primary button — referenced everywhere but never actually
+     defined until now. */
+  .card {
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px 0 rgba(28,28,26,0.08), 0 1px 2px -1px rgba(28,28,26,0.06);
+  }
+  .btn-primary, .btn-glass-sm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    font-weight: 600;
+    color: #15281E;
+    background: rgba(255,255,255,0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.7);
+    box-shadow: 0 4px 14px -2px rgba(31,58,46,0.18), inset 0 1px 0 rgba(255,255,255,0.6);
+    transition: all .2s ease;
+  }
+  .btn-primary { border-radius: 0.5rem; padding: 0.625rem 1rem; font-size: 0.875rem; }
+  .btn-glass-sm { border-radius: 0.375rem; padding: 0.375rem 0.75rem; font-size: 0.75rem; box-shadow: 0 3px 10px -2px rgba(31,58,46,0.16), inset 0 1px 0 rgba(255,255,255,0.6); }
+  .btn-primary:hover, .btn-glass-sm:hover {
+    background: rgba(255,255,255,0.72);
+    box-shadow: 0 6px 18px -2px rgba(31,58,46,0.24), inset 0 1px 0 rgba(255,255,255,0.7);
+    transform: translateY(-1px);
+  }
+  .btn-primary:active, .btn-glass-sm:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px -2px rgba(31,58,46,0.18), inset 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .btn-primary:disabled, .btn-glass-sm:disabled {
+    opacity: 0.5; cursor: not-allowed; transform: none;
+  }
+  .nav-badge {
+    background: #ef4444; color: #fff; font-size: 10px; font-weight: 700;
+    line-height: 1; border-radius: 9999px; padding: 3px 6px; margin-left: auto;
+  }
+
   /* Voucher stamps */
   .voucher-stamp { pointer-events: none; user-select: none; }
 
@@ -251,7 +292,7 @@ const NAV = [
     name: "Settings", icon: "settings", path: "settings",
     description: "System configuration, users, roles, permissions and numbering.",
     children: [
-      { name: "Users & Roles", path: "settings/users-roles", description: "Manage users and their roles." },
+      { name: "Teams", path: "settings/users-roles", description: "Manage staff accounts and roles." },
       { name: "Approval Rules", path: "settings/approval-rules", description: "Configure approval workflows." },
       { name: "Chart of Accounts", path: "settings/chart-of-accounts", description: "Manage the company's account structure." },
       { name: "Tax Settings", path: "settings/tax", description: "Configure tax settings." },
@@ -270,14 +311,22 @@ const STANDBY_MODULES = {
   analytics:  { name: "Business Analytics",       icon: "trending-up",   enabled: false },
 };
 
-// role -> which top-level module paths are visible. Empty for now (every
-// signed-in user sees every module) until real per-role access is defined.
+// role -> which top-level module paths are visible. Missing key = visible;
+// only list what a role should NOT see. Legacy roles (super_admin, admin,
+// management, finance_staff) are kept as safe full/near-full-access
+// aliases so any account created before this role set existed doesn't
+// lose access — reassign them a real role from Settings > Teams.
 const ROLE_PERMISSIONS = {
-  super_admin:     {},
-  finance_manager: {},
-  finance_staff:   {},
-  admin:           {},
-  management:      {},
+  system_admin: {},
+  finance_manager: { procurement: false, installation: false, administration: false, settings: false },
+  custodian: { 'client-orders': false, finance: false, billing: false, procurement: false, installation: false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
+  procurement_staff: { 'client-orders': false, finance: false, billing: false, installation: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
+  operations: { finance: false, billing: false, procurement: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, administration: false, settings: false },
+  // Legacy
+  super_admin: {},
+  admin: {},
+  management: {},
+  finance_staff: { administration: false, settings: false },
 };
 
 let currentUser = null;
@@ -487,8 +536,8 @@ async function handleSignUp() {
     await setDoc(doc(db, 'users', cred.user.uid), {
       name: name || email.split('@')[0],
       email,
-      role: isFirstUser ? 'super_admin' : 'finance_staff',
-      department: isFirstUser ? 'Administration' : 'Finance',
+      role: isFirstUser ? 'system_admin' : 'operations',
+      department: isFirstUser ? 'Administration' : 'Operations',
       isActive: true,
       createdAt: serverTimestamp(),
     });
@@ -536,6 +585,7 @@ function sidebarHtml() {
     const visible = canAccess(item.path);
     if (!visible) return '';
     const hasChildren = !!item.children;
+    const rightSlot = item.path === 'approvals' ? '<span id="nav-badge-approvals"></span>' : (hasChildren ? icon('chevron-down', 'w-4 h-4 nav-chevron transition-transform') : '');
     return `
       <div class="nav-group" data-nav-key="${item.path}">
         <button class="nav-link w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-md text-sm font-medium text-cream/90 hover:bg-white/10 transition-colors" data-nav-toggle="${item.path}">
@@ -543,7 +593,7 @@ function sidebarHtml() {
             ${icon(item.icon, 'w-[18px] h-[18px]')}
             ${item.name}
           </span>
-          ${hasChildren ? icon('chevron-down', 'w-4 h-4 nav-chevron transition-transform') : ''}
+          ${rightSlot}
         </button>
         ${hasChildren ? `
           <div class="nav-children pl-9 space-y-0.5 mt-0.5 overflow-hidden" data-nav-children="${item.path}">
@@ -630,6 +680,19 @@ function renderShell() {
   refreshIcons();
   wireShellEvents();
   applyUserToChrome();
+  refreshApprovalsBadge();
+}
+
+async function refreshApprovalsBadge() {
+  const badgeEl = document.getElementById('nav-badge-approvals');
+  if (!badgeEl || !canApproveDisbursements()) return;
+  try {
+    const vouchers = await fetchFinanceCollection('disbursementVouchers');
+    const count = vouchers.filter(v => v.status === 'Pending').length;
+    badgeEl.innerHTML = count > 0 ? `<span class="nav-badge">${count}</span>` : '';
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 function applyUserToChrome() {
@@ -641,10 +704,14 @@ function applyUserToChrome() {
   ['sidebar-avatar','header-avatar'].forEach(id => { const n = document.getElementById(id); if (n) n.textContent = initials; });
 }
 
+const TEAM_ROLES = ['system_admin', 'finance_manager', 'custodian', 'procurement_staff', 'operations'];
 function roleLabel(role) {
   const map = {
-    super_admin: 'Super Admin', finance_manager: 'Finance Manager', finance_staff: 'Finance Staff',
-    admin: 'Admin', management: 'Management'
+    system_admin: 'System Admin', finance_manager: 'Finance Manager', custodian: 'Custodian',
+    procurement_staff: 'Procurement Staff', operations: 'Operations',
+    // Legacy
+    super_admin: 'System Admin (legacy)', admin: 'System Admin (legacy)',
+    management: 'Finance Manager (legacy)', finance_staff: 'Operations (legacy)',
   };
   return map[role] || role || '—';
 }
@@ -998,6 +1065,14 @@ function renderRoute() {
   };
   if (disbursementPages[path]) {
     disbursementPages[path]();
+    return;
+  }
+  if (path === 'approvals') {
+    renderApprovalsPage();
+    return;
+  }
+  if (path === 'settings/users-roles') {
+    renderTeamsPage();
     return;
   }
 
@@ -1649,7 +1724,7 @@ function crmPullResultHtml(so) {
           <p class="text-sm font-medium text-charcoal">${escapeAttr(so.orderNo)} — ${escapeAttr(so.billedTo && so.billedTo.name)}</p>
           <p class="text-xs text-muted mt-0.5">Customer PO ${escapeAttr(so.poNumber)} · ${formatCurrency(so.total)} · Control No. ${escapeAttr(so.controlNo)}</p>
         </div>
-        <button type="button" id="crm-pull-confirm" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5 shrink-0">Confirm & Fill</button>
+        <button type="button" id="crm-pull-confirm" class="btn-glass-sm shrink-0">Confirm & Fill</button>
       </div>
       <p class="text-xs text-muted mt-2">PO Type and Sales Person aren't in CRM's Sales Order record — set those manually. Payment Terms fills in automatically only when CRM has a "Net X" value set; Advance Payment / COD aren't captured in CRM yet.</p>
     </div>`;
@@ -1836,7 +1911,7 @@ async function renderReadyForBillingPage() {
                 <td class="px-4 py-3">${po.clientName || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
                 <td class="px-4 py-3">${po.datesDelivered || '—'}</td>
-                <td class="px-4 py-3 text-right"><button data-mark-ready="${po.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Mark Ready for Billing</button></td>
+                <td class="px-4 py-3 text-right"><button data-mark-ready="${po.id}" class="btn-glass-sm">Mark Ready for Billing</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -2321,7 +2396,7 @@ async function renderSalesRecognitionPage() {
                 <td class="px-4 py-3">${po.clientName || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
                 <td class="px-4 py-3">${po.datesDelivered || '—'}</td>
-                <td class="px-4 py-3 text-right"><button data-recognize="${po.id}" data-amount="${po.poAmount}" data-client="${escapeAttr(po.clientName)}" data-pono="${escapeAttr(po.clientPONumber)}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Recognize Sale</button></td>
+                <td class="px-4 py-3 text-right"><button data-recognize="${po.id}" data-amount="${po.poAmount}" data-client="${escapeAttr(po.clientName)}" data-pono="${escapeAttr(po.clientPONumber)}" class="btn-glass-sm">Recognize Sale</button></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -4219,7 +4294,7 @@ async function renderSupplierBillsPage() {
                 <td class="px-4 py-3">${po.supplierName || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
                 <td class="px-4 py-3">${po.datesReceived || '—'}</td>
-                <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-bills/new/${po.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Create Bill</a></td>
+                <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-bills/new/${po.id}" class="btn-glass-sm">Create Bill</a></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -4833,7 +4908,7 @@ async function renderBankReconciliationPage() {
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
                 <td class="px-4 py-3 font-medium text-charcoal">${b.nickname || '—'}</td>
                 <td class="px-4 py-3 text-right">${formatCurrency(balances[b.id])}</td>
-                <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-reconciliation/new/${b.id}" class="text-xs font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-1.5">Reconcile</a></td>
+                <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-reconciliation/new/${b.id}" class="btn-glass-sm">Reconcile</a></td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -5016,7 +5091,8 @@ const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Cancelled'];
 const CA_AGING_DAYS = 30;
 
 function canApproveDisbursements() {
-  return !!(currentProfile && currentProfile.role !== 'finance_staff');
+  const approverRoles = ['system_admin', 'finance_manager', 'super_admin', 'admin', 'management'];
+  return !!(currentProfile && approverRoles.includes(currentProfile.role));
 }
 async function generateSeriesNumber(collectionName, prefix, field) {
   const year = new Date().getFullYear();
@@ -5292,6 +5368,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
       try {
         const requiresBatchingGuess = bankAccounts.find(b => b.id === bankAccountId)?.accountType === 'Cash';
         await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: requiresBatchingGuess });
+        refreshApprovalsBadge();
         navigateTo('disbursement/vouchers');
       } catch (err) {
         console.error(err);
@@ -5368,7 +5445,7 @@ async function renderDisbursementVoucherDetailPage(id) {
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
   if (v.status === 'Pending' && canApproveDisbursements()) {
-    buttons.push(`<button type="button" id="dv-approve-btn" class="text-sm font-medium text-white bg-forest hover:bg-forest-dark rounded-md px-3 py-2">Approve</button>`);
+    buttons.push(`<button type="button" id="dv-approve-btn" class="btn-glass-sm text-sm">Approve</button>`);
     buttons.push(`<button type="button" id="dv-reject-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Reject</button>`);
   }
   if (v.status === 'Pending') {
@@ -5391,6 +5468,7 @@ async function renderDisbursementVoucherDetailPage(id) {
         await executeDisbursementVoucher({ ...v, id, datePaid });
         await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, requiresBatching: false });
       }
+      refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
     } catch (e) {
       console.error(e);
@@ -5403,6 +5481,7 @@ async function renderDisbursementVoucherDetailPage(id) {
     setBusy(true);
     try {
       await updateFinanceDoc('disbursementVouchers', id, { status: 'Rejected', rejectedBy: currentUser.email, dateRejected: todayISO() });
+      refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
     } catch (e) {
       console.error(e);
@@ -5415,6 +5494,7 @@ async function renderDisbursementVoucherDetailPage(id) {
     setBusy(true);
     try {
       await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO() });
+      refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
     } catch (e) {
       console.error(e);
@@ -5520,6 +5600,7 @@ async function renderEncashmentBatchPage() {
           await executeDisbursementVoucher({ ...v, datePaid: batchDate, batchId: batchRef.id });
           await updateFinanceDoc('disbursementVouchers', v.id, { status: 'Paid', datePaid: batchDate, batchId: batchRef.id, batchNumber });
         }
+        refreshApprovalsBadge();
         navigateTo('disbursement/encashment-summary');
       } catch (err) {
         console.error(err);
@@ -5851,6 +5932,7 @@ async function renderNewReplenishmentPage(fundId) {
       btn.disabled = true; btn.innerHTML = spinnerHtml();
       try {
         await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: true });
+        refreshApprovalsBadge();
         navigateTo('disbursement/vouchers');
       } catch (err) {
         console.error(err);
@@ -6010,6 +6092,7 @@ async function renderNewCashAdvancePage() {
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
           status: 'Pending', requiresBatching: true,
         });
+        refreshApprovalsBadge();
         navigateTo('disbursement/cash-advances');
       } catch (err) {
         console.error(err);
@@ -6246,6 +6329,150 @@ async function renderEncashmentSummaryPage() {
   }
 }
 
+/* ---- Approvals — central inbox for everything pending approval ---- */
+async function renderApprovalsPage() {
+  if (!canApproveDisbursements()) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
+      <h2 class="text-base font-medium text-charcoal">Approvals are limited to Managers and Admins</h2>
+      <p class="text-sm text-muted mt-1.5 max-w-sm">Your role can request disbursements but not approve them.</p>
+    </div>`);
+    refreshIcons();
+    return;
+  }
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Approvals</h1>
+      <p class="text-sm text-muted mt-1">Everything waiting on your approval, in one place.</p>
+    </div>
+    <div id="approvals-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const vouchers = await fetchFinanceCollection('disbursementVouchers');
+    const pending = vouchers.filter(v => v.status === 'Pending');
+    document.getElementById('approvals-container').innerHTML = pending.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">DV #</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Account Title</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Requested By</th><th class="px-4 py-3">Date</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${pending.map(v => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
+                <td class="px-4 py-3">${v.type}</td>
+                <td class="px-4 py-3">${v.payee || '—'}</td>
+                <td class="px-4 py-3">${v.accountTitle || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
+                <td class="px-4 py-3">${v.requestedBy || '—'}</td>
+                <td class="px-4 py-3">${formatDate(v.dateRequested)}</td>
+                <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="text-forest hover:underline text-xs font-medium">Review</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+        <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('check-circle', 'w-5 h-5')}</div>
+        <p class="text-sm text-muted">Nothing pending approval right now.</p>
+      </div>`;
+    refreshIcons();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('approvals-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ---- Teams (Settings > Teams) — staff accounts and role management ---- */
+function teamsTableHtml(users) {
+  if (!users.length) {
+    return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
+      <p class="text-sm text-muted">No accounts yet.</p>
+    </div>`;
+  }
+  return `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Email</th><th class="px-4 py-3">Department</th><th class="px-4 py-3">Role</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Created</th>
+        </tr></thead>
+        <tbody>
+          ${users.map(u => {
+            const created = u.createdAt && u.createdAt.toDate ? formatDate(u.createdAt.toDate().toISOString().slice(0, 10)) : '—';
+            const roleKnown = TEAM_ROLES.includes(u.role);
+            return `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${u.name || '—'}</td>
+                <td class="px-4 py-3">${u.email || '—'}</td>
+                <td class="px-4 py-3">${u.department || '—'}</td>
+                <td class="px-4 py-3">
+                  <select data-team-role="${u.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                    ${!roleKnown ? `<option value="${u.role}" selected>${roleLabel(u.role)}</option>` : ''}
+                    ${TEAM_ROLES.map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${roleLabel(r)}</option>`).join('')}
+                  </select>
+                </td>
+                <td class="px-4 py-3">
+                  <select data-team-status="${u.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                    <option value="true" ${u.isActive !== false ? 'selected' : ''}>Active</option>
+                    <option value="false" ${u.isActive === false ? 'selected' : ''}>Inactive</option>
+                  </select>
+                </td>
+                <td class="px-4 py-3">${created}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+function wireTeamsSelects() {
+  document.querySelectorAll('[data-team-role]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const uid = sel.getAttribute('data-team-role');
+      sel.disabled = true;
+      try {
+        await updateFinanceDoc('users', uid, { role: sel.value });
+        if (currentUser && uid === currentUser.uid) currentProfile = { ...currentProfile, role: sel.value };
+        renderTeamsPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update this account\'s role. Please try again.');
+        sel.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll('[data-team-status]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const uid = sel.getAttribute('data-team-status');
+      sel.disabled = true;
+      try {
+        await updateFinanceDoc('users', uid, { isActive: sel.value === 'true' });
+        renderTeamsPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not update this account\'s status. Please try again.');
+        sel.disabled = false;
+      }
+    });
+  });
+}
+async function renderTeamsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Teams</h1>
+      <p class="text-sm text-muted mt-1">Staff accounts and roles. New sign-ups default to Operations — the first account ever created is always System Admin automatically. Change roles below as needed.</p>
+    </div>
+    <div id="teams-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  try {
+    const users = await fetchFinanceCollection('users');
+    document.getElementById('teams-list-container').innerHTML = teamsTableHtml(users);
+    refreshIcons();
+    wireTeamsSelects();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('teams-list-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
 /* ==========================================================================
    AUTH BOOTSTRAP
    ========================================================================== */
@@ -6254,7 +6481,7 @@ async function isFirstAccount() {
     const existing = await getDocs(query(collection(db, 'users'), limit(1)));
     return existing.empty;
   } catch (e) {
-    console.warn('Could not check for existing users, defaulting role to finance_staff.', e);
+    console.warn('Could not check for existing users, defaulting role to operations.', e);
     return false;
   }
 }
@@ -6273,8 +6500,8 @@ async function ensureUserProfile(user) {
   const profile = {
     name: user.email.split('@')[0],
     email: user.email,
-    role: isFirstUser ? 'super_admin' : 'finance_staff',
-    department: isFirstUser ? 'Administration' : 'Finance',
+    role: isFirstUser ? 'system_admin' : 'operations',
+    department: isFirstUser ? 'Administration' : 'Operations',
     isActive: true,
     createdAt: serverTimestamp(),
   };
@@ -6301,7 +6528,7 @@ async function bootstrap() {
         currentProfile = await ensureUserProfile(user);
       } catch (e) {
         console.error('Could not load/create user profile:', e);
-        currentProfile = { name: user.email, email: user.email, role: 'finance_staff', department: 'Finance', isActive: true };
+        currentProfile = { name: user.email, email: user.email, role: 'operations', department: 'Operations', isActive: true };
       }
       renderShell();
       initRouter();
