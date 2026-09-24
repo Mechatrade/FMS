@@ -5123,6 +5123,40 @@ function voucherActionsBarHtml() {
   return `<div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden" id="voucher-actions"></div>`;
 }
 
+/* ---- Shared formal letterhead for all printable vouchers ---- */
+const COMPANY_INFO = {
+  name: 'MECHATRADE INDUSTRIAL SOLUTIONS INC.',
+  address: 'Lot 22 Blk 12 Chestnut Avenue, Grand Chestnut Grove, Pulong Santa Cruz, City of Santa Rosa, Laguna, 4026',
+  email: 'mechatrade.sales@gmail.com',
+  website: 'www.mechatrade.com',
+  tin: 'TIN: 812-084-878-00000',
+};
+function voucherLetterheadHtml(docTitle, numberLabel, numberValue, status, dateLabel, dateValue) {
+  return `
+    <div class="flex items-start justify-between gap-4 pb-4 border-b-2 border-orange-500">
+      <div class="flex items-start gap-3 min-w-0">
+        <img src="data:image/png;base64,${LOGO_MARK_B64}" alt="Mechatrade" class="w-12 h-12 object-contain shrink-0" />
+        <div class="min-w-0">
+          <p class="text-sm font-bold text-charcoal leading-tight">${COMPANY_INFO.name}</p>
+          <p class="text-[11px] text-muted leading-snug mt-1 max-w-xs">${COMPANY_INFO.address}</p>
+          <p class="text-[11px] text-muted leading-snug">${COMPANY_INFO.email} · ${COMPANY_INFO.website}</p>
+          <p class="text-[11px] text-muted leading-snug">${COMPANY_INFO.tin}</p>
+        </div>
+      </div>
+      <div class="text-right shrink-0">
+        <p class="text-lg font-bold text-charcoal tracking-wide uppercase">${docTitle}</p>
+        <div class="mt-2 space-y-0.5 text-xs">
+          <p><span class="text-muted">${numberLabel}</span> <span class="font-medium text-charcoal">${numberValue}</span></p>
+          <p><span class="text-muted">Status</span> <span class="font-medium text-charcoal">${status}</span></p>
+          <p><span class="text-muted">${dateLabel}</span> <span class="font-medium text-charcoal">${dateValue}</span></p>
+        </div>
+      </div>
+    </div>`;
+}
+function voucherFooterHtml() {
+  return `<p class="text-center text-[10px] text-muted mt-6 pt-4 border-t border-borderc">${COMPANY_INFO.name} · ${COMPANY_INFO.website}</p>`;
+}
+
 /* ---- Payment execution (called on immediate-approve or batch-process) ---- */
 async function executeRegularPaymentDV(dv) {
   const { sourceCollection, sourceId, amount, modeOfPayment, bankAccountId, bankAccountName, datePaid, number } = dv;
@@ -5326,27 +5360,23 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     const wrap = document.getElementById('dv-preview-wrap');
     wrap.classList.remove('hidden');
     wrap.innerHTML = `
-      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        <div class="text-center mb-6">
-          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
-          <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher</h2>
-          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
-        </div>
-        <div class="grid grid-cols-2 gap-4 text-sm">
+        ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', draft.number, 'Pending', 'Date Requested', formatDate(draft.dateRequested))}
+        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.dateRequested)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
           <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
           <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
-          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
           <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
+          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
         <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
           <div><p class="text-xs text-muted">Prepared By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
           <div><p class="text-xs text-muted">Approved By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
         </div>
+        ${voucherFooterHtml()}
       </div>
       <div id="dv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
@@ -5386,22 +5416,17 @@ function dvDetailCardHtml(v) {
     ? v.accountTitleBreakdown.map(l => `<div class="flex justify-between text-sm py-1"><span>${escapeAttr(l.account)}</span><span>${formatCurrency(l.amount)}</span></div>`).join('')
     : '';
   return `
-    <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+    <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
       ${voucherStampHtml(v.status)}
-      <div class="text-center mb-6">
-        <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
-        <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher</h2>
-        <p class="text-sm text-muted mt-0.5">${v.number}</p>
-      </div>
-      <div class="grid grid-cols-2 gap-4 text-sm">
+      ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', v.number, v.status, 'Date Requested', formatDate(v.dateRequested))}
+      <div class="grid grid-cols-2 gap-4 text-sm mt-6">
         <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.payee)}</p></div>
-        <div><p class="text-xs text-muted uppercase">Date Requested</p><p class="font-medium text-charcoal mt-0.5">${formatDate(v.dateRequested)}</p></div>
-        <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
         <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
         <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
-        <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
+        <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
         ${v.approvedBy ? `<div><p class="text-xs text-muted uppercase">Approved By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.approvedBy)} · ${formatDate(v.dateApproved)}</p></div>` : ''}
         ${v.rejectedBy ? `<div><p class="text-xs text-muted uppercase">Rejected By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.rejectedBy)} · ${formatDate(v.dateRejected)}</p></div>` : ''}
         ${v.cancelledBy ? `<div><p class="text-xs text-muted uppercase">Cancelled By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.cancelledBy)} · ${formatDate(v.dateCancelled)}</p></div>` : ''}
@@ -5413,6 +5438,7 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted">Prepared By</p><p class="font-medium text-charcoal mt-6 border-t border-borderc pt-1">${escapeAttr(v.requestedBy)}</p></div>
         <div><p class="text-xs text-muted">Approved By</p><p class="font-medium text-charcoal mt-6 border-t border-borderc pt-1">${escapeAttr(v.approvedBy) || ''}</p></div>
       </div>
+      ${voucherFooterHtml()}
     </div>`;
 }
 async function renderDisbursementVoucherDetailPage(id) {
@@ -5735,21 +5761,17 @@ async function renderNewPettyCashVoucherPage(fundId) {
     const wrap = document.getElementById('pcv-preview-wrap');
     wrap.classList.remove('hidden');
     wrap.innerHTML = `
-      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Paid')}
-        <div class="text-center mb-6">
-          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
-          <h2 class="text-lg font-semibold text-charcoal mt-1">Petty Cash Voucher</h2>
-          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
-        </div>
-        <div class="grid grid-cols-2 gap-4 text-sm">
+        ${voucherLetterheadHtml('Petty Cash Voucher', 'PCV No.', draft.number, 'Paid', 'Date', formatDate(draft.date))}
+        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.fundName)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.date)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Category</p><p class="font-medium text-charcoal mt-0.5">${draft.category}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
-          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Category</p><p class="font-medium text-charcoal mt-0.5">${draft.category}</p></div>
           <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
+          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
+        ${voucherFooterHtml()}
       </div>
       <div id="pcv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
@@ -5895,23 +5917,19 @@ async function renderNewReplenishmentPage(fundId) {
     const wrap = document.getElementById('repl-preview-wrap');
     wrap.classList.remove('hidden');
     wrap.innerHTML = `
-      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        <div class="text-center mb-6">
-          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
-          <h2 class="text-lg font-semibold text-charcoal mt-1">Disbursement Voucher — Petty Cash Replenishment</h2>
-          <p class="text-sm text-muted mt-0.5">${draft.number}</p>
-        </div>
-        <div class="grid grid-cols-2 gap-4 text-sm">
+        ${voucherLetterheadHtml('Disbursement Voucher — Petty Cash Replenishment', 'DV No.', draft.number, 'Pending', 'Date Requested', formatDate(draft.dateRequested))}
+        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.dateRequested)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Withdraw From</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
           <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Withdraw From</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
         </div>
         <div class="mt-4 pt-4 border-t border-borderc">
           <p class="text-xs text-muted uppercase mb-2">Breakdown</p>
           ${breakdownArr.map(b => `<div class="flex justify-between text-sm py-1"><span>${b.account}</span><span>${formatCurrency(b.amount)}</span></div>`).join('')}
         </div>
+        ${voucherFooterHtml()}
       </div>
       <div id="repl-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
@@ -6047,21 +6065,17 @@ async function renderNewCashAdvancePage() {
     const wrap = document.getElementById('ca-preview-wrap');
     wrap.classList.remove('hidden');
     wrap.innerHTML = `
-      <div class="relative card p-8 max-w-2xl mx-auto" id="voucher-print-area">
+      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        <div class="text-center mb-6">
-          <p class="text-xs text-muted uppercase tracking-wide">Mechatrade Industrial Solutions Inc.</p>
-          <h2 class="text-lg font-semibold text-charcoal mt-1">Cash Advance Request</h2>
-          <p class="text-sm text-muted mt-0.5">${draft.caNumber} · DV ${draft.dvNumber}</p>
-        </div>
-        <div class="grid grid-cols-2 gap-4 text-sm">
+        ${voucherLetterheadHtml('Cash Advance Request', 'CA No.', `${draft.caNumber} · DV ${draft.dvNumber}`, 'Pending', 'Date', formatDate(draft.date))}
+        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Employee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Date</p><p class="font-medium text-charcoal mt-0.5">${formatDate(draft.date)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
           <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
+        ${voucherFooterHtml()}
       </div>
       <div id="ca-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
