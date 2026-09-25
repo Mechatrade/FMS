@@ -695,6 +695,7 @@ function renderShell() {
   wireShellEvents();
   applyUserToChrome();
   refreshApprovalsBadge();
+  startTableResizeObserver();
 }
 
 async function refreshApprovalsBadge() {
@@ -1150,44 +1151,64 @@ function contentWrap(inner) {
   }
 }
 function makeTablesResizable(container) {
-  const tables = container.querySelectorAll('table');
-  tables.forEach(table => {
-    const ths = table.querySelectorAll('thead th');
-    if (!ths.length) return;
-    // Lock in the natural auto-computed widths first, so switching to a
-    // fixed layout (needed for manual widths to stick) doesn't visibly
-    // change anything until the person actually drags a column.
-    const widths = Array.from(ths).map(th => th.getBoundingClientRect().width);
-    table.style.tableLayout = 'fixed';
-    table.classList.add('resizable-cols');
-    ths.forEach((th, i) => { th.style.width = widths[i] + 'px'; });
-    ths.forEach((th, i) => {
-      if (i === ths.length - 1) return; // resizing the last column isn't useful
-      th.classList.add('resizable-th');
-      const handle = document.createElement('div');
-      handle.className = 'col-resize-handle';
-      th.appendChild(handle);
-      handle.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const startX = e.clientX;
-        const startWidth = th.getBoundingClientRect().width;
-        handle.classList.add('is-resizing');
-        document.body.classList.add('col-resizing');
-        function onMove(ev) {
-          th.style.width = Math.max(50, startWidth + (ev.clientX - startX)) + 'px';
-        }
-        function onUp() {
-          handle.classList.remove('is-resizing');
-          document.body.classList.remove('col-resizing');
-          document.removeEventListener('mousemove', onMove);
-          document.removeEventListener('mouseup', onUp);
-        }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
+  container.querySelectorAll('table').forEach(makeTableResizable);
+}
+function makeTableResizable(table) {
+  if (table.dataset.resizableApplied === '1') return; // guard against double-processing
+  const ths = table.querySelectorAll('thead th');
+  if (!ths.length) return;
+  table.dataset.resizableApplied = '1';
+  // Lock in the natural auto-computed widths first, so switching to a
+  // fixed layout (needed for manual widths to stick) doesn't visibly
+  // change anything until the person actually drags a column.
+  const widths = Array.from(ths).map(th => th.getBoundingClientRect().width);
+  table.style.tableLayout = 'fixed';
+  table.classList.add('resizable-cols');
+  ths.forEach((th, i) => { th.style.width = widths[i] + 'px'; });
+  ths.forEach((th, i) => {
+    if (i === ths.length - 1) return; // resizing the last column isn't useful
+    th.classList.add('resizable-th');
+    const handle = document.createElement('div');
+    handle.className = 'col-resize-handle';
+    th.appendChild(handle);
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startWidth = th.getBoundingClientRect().width;
+      handle.classList.add('is-resizing');
+      document.body.classList.add('col-resizing');
+      function onMove(ev) {
+        th.style.width = Math.max(50, startWidth + (ev.clientX - startX)) + 'px';
+      }
+      function onUp() {
+        handle.classList.remove('is-resizing');
+        document.body.classList.remove('col-resizing');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
     });
   });
+}
+let tableResizeObserver = null;
+function startTableResizeObserver() {
+  const content = document.getElementById('content');
+  if (!content) return;
+  if (tableResizeObserver) tableResizeObserver.disconnect();
+  tableResizeObserver = new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      m.addedNodes.forEach(node => {
+        if (node.nodeType !== 1) return; // element nodes only
+        if (node.tagName === 'TABLE') makeTableResizable(node);
+        else if (node.querySelectorAll) node.querySelectorAll('table').forEach(makeTableResizable);
+      });
+    }
+  });
+  tableResizeObserver.observe(content, { childList: true, subtree: true });
+}
+
 }
 
 function renderDashboard() {
