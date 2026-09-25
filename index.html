@@ -2366,6 +2366,27 @@ const CASH_OFFSET_ACCOUNTS = ["Owner's Capital", "Owner's Drawings", 'Other Inco
 const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
 const MODE_OF_PAYMENT_OPTIONS = ['Cash', 'Cheque', 'Debit Memo', 'Others'];
+function modeOfPaymentFieldHtml(selectedMode, chequeNo) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Mode of Payment <span class="text-red-500">*</span></label>
+      <select id="field-modeOfPayment" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        ${MODE_OF_PAYMENT_OPTIONS.map(o => `<option value="${o}" ${selectedMode === o ? 'selected' : ''}>${o}</option>`).join('')}
+      </select>
+    </div>
+    <div id="mop-cheque-wrap" class="${selectedMode === 'Cheque' ? '' : 'hidden'}">
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Cheque No. <span class="text-red-500">*</span></label>
+      <input id="field-chequeNo" type="text" value="${escapeAttr(chequeNo)}" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+    </div>`;
+}
+function wireModeOfPaymentToggle() {
+  const sel = document.getElementById('field-modeOfPayment');
+  const wrap = document.getElementById('mop-cheque-wrap');
+  if (!sel || !wrap) return;
+  sel.addEventListener('change', () => {
+    wrap.classList.toggle('hidden', sel.value !== 'Cheque');
+  });
+}
 
 function spinnerHtml() {
   return `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
@@ -5495,7 +5516,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: defaultAmount })}
         ${dateField('dvDate', 'Date Requested', { required: true, value: todayISO() })}
-        ${selectField('modeOfPayment', 'Mode of Payment', MODE_OF_PAYMENT_OPTIONS, { required: true, value: 'Cash' })}
+        ${modeOfPaymentFieldHtml('Cash', '')}
         ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
         ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, value: `Payment — ${accountTitle}` })}
       </div>
@@ -5506,6 +5527,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     </form>
     <div id="dv-preview-wrap" class="hidden"></div>`);
   refreshIcons();
+  wireModeOfPaymentToggle();
 
   document.getElementById('dv-req-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('dv-req-form-error');
@@ -5513,6 +5535,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
     const date = document.getElementById('field-dvDate').value;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const purpose = document.getElementById('field-dvPurpose').value.trim();
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
@@ -5520,6 +5543,11 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
 
     if (!amount || amount <= 0 || !date || !bankAccountId) {
       errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -5532,7 +5560,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
     const draft = {
       number: previewNumber, type: 'Regular Payment', payee, amount, purpose,
-      modeOfPayment, bankAccountId, bankAccountName, accountTitle,
+      modeOfPayment, chequeNo, bankAccountId, bankAccountName, accountTitle,
       sourceCollection, sourceId, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
 
@@ -5548,6 +5576,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
           <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
+          ${draft.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.chequeNo)}</p></div>` : ''}
           <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
           <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
@@ -5604,6 +5633,7 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
         <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
         <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
+        ${v.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.chequeNo)}</p></div>` : ''}
         <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
         <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
@@ -5776,7 +5806,7 @@ async function renderEditDisbursementVoucherPage(id) {
       <div id="dv-edit-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: v.amount })}
-        ${selectField('modeOfPayment', 'Mode of Payment', MODE_OF_PAYMENT_OPTIONS, { required: true, value: v.modeOfPayment })}
+        ${modeOfPaymentFieldHtml(v.modeOfPayment, v.chequeNo)}
         ${bankAccountSelectHtml(bankAccounts, v.bankAccountId, { required: true })}
         ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, required: true, value: v.purpose })}
       </div>
@@ -5786,6 +5816,7 @@ async function renderEditDisbursementVoucherPage(id) {
       </div>
     </form>`);
   refreshIcons();
+  wireModeOfPaymentToggle();
 
   document.getElementById('dv-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -5796,6 +5827,7 @@ async function renderEditDisbursementVoucherPage(id) {
 
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const purpose = document.getElementById('field-dvPurpose').value.trim();
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
@@ -5803,6 +5835,11 @@ async function renderEditDisbursementVoucherPage(id) {
 
     if (!amount || amount <= 0 || !modeOfPayment || !purpose || !bankAccountId) {
       errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -5815,7 +5852,7 @@ async function renderEditDisbursementVoucherPage(id) {
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
       await updateFinanceDoc('disbursementVouchers', id, {
-        amount, modeOfPayment, purpose, bankAccountId, bankAccountName,
+        amount, modeOfPayment, chequeNo, purpose, bankAccountId, bankAccountName,
         status: 'Pending', dateRequested: todayISO(),
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
@@ -6180,6 +6217,7 @@ async function renderNewReplenishmentPage(fundId) {
       <div id="repl-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${dateField('replDate', 'Date Requested', { required: true, value: todayISO() })}
+        ${modeOfPaymentFieldHtml('Cheque', '')}
         ${bankAccountSelectHtml(realBankAccounts, null, { required: true })}
       </div>
       <p class="text-xs text-muted">This always goes through Encashment Batching — withdraw from a real bank/checking account, not another Cash Fund.</p>
@@ -6190,11 +6228,14 @@ async function renderNewReplenishmentPage(fundId) {
     </form>
     <div id="repl-preview-wrap" class="hidden"></div>`);
   refreshIcons();
+  wireModeOfPaymentToggle();
 
   document.getElementById('repl-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('repl-form-error');
     errBox.classList.add('hidden');
     const date = document.getElementById('field-replDate').value;
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
     const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
@@ -6204,11 +6245,16 @@ async function renderNewReplenishmentPage(fundId) {
       errBox.classList.remove('hidden');
       return;
     }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
+      errBox.classList.remove('hidden');
+      return;
+    }
 
     const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
     const draft = {
       number: previewNumber, type: 'Petty Cash Replenishment', payee: fund.nickname, amount: total,
-      purpose: `Petty cash replenishment — ${fund.nickname}`, modeOfPayment: 'Cheque', bankAccountId, bankAccountName,
+      purpose: `Petty cash replenishment — ${fund.nickname}`, modeOfPayment, chequeNo, bankAccountId, bankAccountName,
       accountTitle: breakdownArr.map(b => b.account).join(', '), accountTitleBreakdown: breakdownArr,
       pcvIds: unreplenished.map(p => p.id), requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
@@ -6223,6 +6269,8 @@ async function renderNewReplenishmentPage(fundId) {
         <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
           <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
+          ${draft.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.chequeNo)}</p></div>` : ''}
           <div><p class="text-xs text-muted uppercase">Withdraw From</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
         </div>
         <div class="mt-4 pt-4 border-t border-borderc">
@@ -6330,6 +6378,7 @@ async function renderNewCashAdvancePage() {
         ${numberField('caAmount', 'Amount (₱)', { required: true, step: '0.01' })}
         ${dateField('caDate', 'Date Requested', { required: true, value: todayISO() })}
         ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
+        ${modeOfPaymentFieldHtml('Cash', '')}
         ${textareaField('caPurpose', 'Purpose', { span2: true, required: true })}
       </div>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
@@ -6339,6 +6388,7 @@ async function renderNewCashAdvancePage() {
     </form>
     <div id="ca-preview-wrap" class="hidden"></div>`);
   refreshIcons();
+  wireModeOfPaymentToggle();
 
   document.getElementById('ca-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('ca-form-error');
@@ -6350,16 +6400,23 @@ async function renderNewCashAdvancePage() {
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
     const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
 
-    if (!employeeName || !amount || !date || !purpose || !bankAccountId) {
+    if (!employeeName || !amount || !date || !purpose || !bankAccountId || !modeOfPayment) {
       errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No.';
       errBox.classList.remove('hidden');
       return;
     }
 
     const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
     const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = { caNumber, dvNumber, employeeName, amount, date, purpose, bankAccountId, bankAccountName };
+    const draft = { caNumber, dvNumber, employeeName, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment, chequeNo };
 
     document.getElementById('ca-form').classList.add('hidden');
     const wrap = document.getElementById('ca-preview-wrap');
@@ -6373,6 +6430,7 @@ async function renderNewCashAdvancePage() {
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
           <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}${draft.chequeNo ? ' — Cheque No. ' + escapeAttr(draft.chequeNo) : ''}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
         ${voucherFooterHtml()}
@@ -6401,7 +6459,7 @@ async function renderNewCashAdvancePage() {
         });
         await createFinanceDoc('disbursementVouchers', {
           number: draft.dvNumber, type: 'Cash Advance Release', payee: draft.employeeName, amount: draft.amount,
-          purpose: draft.purpose, modeOfPayment: 'Cash', bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
+          purpose: draft.purpose, modeOfPayment: draft.modeOfPayment, chequeNo: draft.chequeNo, bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
           accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
           status: 'Pending', requiresBatching: true,
