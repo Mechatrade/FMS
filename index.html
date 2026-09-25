@@ -838,6 +838,14 @@ function renderRoute() {
     renderARPaymentPage(arId);
     return;
   }
+  if (path.startsWith('finance/expenses/edit/')) {
+    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
+    const expId = path.substring('finance/expenses/edit/'.length);
+    setActiveNav('finance/expenses', NAV.find(n => n.path === 'finance'));
+    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Edit Expense' });
+    renderEditExpensePage(expId);
+    return;
+  }
   // AP/Expense/Tax payments now go through Disbursement Vouchers
   // (see disbursement/vouchers/new/... routes below) — no direct-pay route.
 
@@ -2912,7 +2920,7 @@ function expenseTableHtml(entries, vouchersBySource) {
               actionHtml = `<a href="#/disbursement/vouchers/view/${dv.id}" class="text-forest hover:underline text-xs font-medium">View Request</a>`;
             } else {
               statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-gray-50 text-gray-600 border-gray-200">For Request Disbursement</span>`;
-              actionHtml = `<a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>`;
+              actionHtml = `<a href="#/finance/expenses/edit/${e.id}" class="text-forest hover:underline text-xs font-medium">Edit</a> · <a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>`;
             }
             return `
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
@@ -3072,6 +3080,83 @@ async function renderNewExpensePage() {
       errBox.textContent = 'Could not save this expense. Please try again.';
       errBox.classList.remove('hidden');
       btn.disabled = false; btnText.textContent = 'Save Expense';
+    }
+  });
+}
+async function renderEditExpensePage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let exp;
+  try {
+    exp = await fetchFinanceDoc('expenses', id);
+  } catch (e) {
+    console.error(e);
+    contentWrap(poLoadErrorHtml());
+    return;
+  }
+  if (!exp) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Expense not found.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
+    return;
+  }
+  if (exp.status === 'Paid') {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">This expense is already Paid and can't be edited.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
+    return;
+  }
+  try {
+    const vouchers = await fetchFinanceCollection('disbursementVouchers');
+    const activeDV = vouchers.find(v => v.sourceCollection === 'expenses' && v.sourceId === id && (v.status === 'Pending' || v.status === 'Approved'));
+    if (activeDV) {
+      contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+        <p class="text-sm text-charcoal font-medium">A disbursement request is already active for this expense.</p>
+        <p class="text-sm text-muted mt-1">Edit it from the voucher's own Edit & Resubmit instead, or wait until it's Paid or Cancelled.</p>
+        <a href="#/disbursement/vouchers/view/${activeDV.id}" class="mt-4 text-sm text-forest hover:underline">View Request</a>
+      </div>`);
+      return;
+    }
+  } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Edit Expense</h1>
+      <p class="text-sm text-muted mt-1">${escapeAttr(exp.category)}${exp.payee ? ' — ' + escapeAttr(exp.payee) : ''}</p>
+    </div>
+    <form id="exp-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="exp-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${dateField('date', 'Date', { required: true, value: exp.date })}
+        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true, value: exp.category })}
+        ${textField('payee', 'Payee / Vendor', { value: exp.payee })}
+        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01', value: exp.amount })}
+        ${selectField('paymentMethod', 'Payment Method', PAYMENT_METHODS, { value: exp.paymentMethod || 'Cash' })}
+        ${textareaField('description', 'Description', { span2: true, value: exp.description })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="exp-form-submit" type="submit" class="btn-primary"><span id="exp-form-submit-text">Save Changes</span></button>
+        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
+  document.getElementById('exp-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('exp-form-submit');
+    const btnText = document.getElementById('exp-form-submit-text');
+    const errBox = document.getElementById('exp-form-error');
+    errBox.classList.add('hidden');
+    const val = (fieldId) => document.getElementById('field-' + fieldId).value.trim();
+    const date = val('date'), category = val('category'), payee = val('payee'), amount = Number(val('amount')) || 0, paymentMethod = val('paymentMethod'), description = val('description');
+    if (!date || !category || !amount) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await updateFinanceDoc('expenses', id, { date, category, payee, amount, paymentMethod, description });
+      navigateTo('finance/expenses');
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save changes. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save Changes';
     }
   });
 }
