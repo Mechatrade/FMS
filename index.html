@@ -5751,6 +5751,11 @@ async function renderDisbursementVoucherDetailPage(id) {
       onConfirm: async (notes) => {
         try {
           await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO(), cancellationReason: notes });
+          if (v.type === 'Petty Cash Replenishment' && Array.isArray(v.pcvIds)) {
+            for (const pcvId of v.pcvIds) {
+              await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: null, replenishmentRequestNumber: null });
+            }
+          }
           refreshApprovalsBadge();
           renderDisbursementVoucherDetailPage(id);
         } catch (e) {
@@ -5857,6 +5862,11 @@ async function renderEditDisbursementVoucherPage(id) {
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
       });
+      if (v.type === 'Petty Cash Replenishment' && Array.isArray(v.pcvIds)) {
+        for (const pcvId of v.pcvIds) {
+          await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: id, replenishmentRequestNumber: v.number });
+        }
+      }
       refreshApprovalsBadge();
       navigateTo('disbursement/vouchers/view/' + id);
     } catch (err) {
@@ -5982,8 +5992,9 @@ async function renderEncashmentBatchPage() {
 async function computePettyCashOnHand(fund) {
   const pcvs = await fetchFinanceCollection('pettyCashVouchers');
   const unreplenished = pcvs.filter(p => p.fundId === fund.id && p.status === 'Paid' && !p.replenished);
+  const available = unreplenished.filter(p => !p.replenishmentRequestId);
   const spent = unreplenished.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  return { cashOnHand: Number((fund.openingBalance - spent).toFixed(2)), unreplenished };
+  return { cashOnHand: Number((fund.openingBalance - spent).toFixed(2)), unreplenished, available };
 }
 async function renderPettyCashPage() {
   contentWrap(`
@@ -6008,8 +6019,8 @@ async function renderPettyCashPage() {
       return;
     }
     const rows = await Promise.all(funds.map(async (f) => {
-      const { cashOnHand, unreplenished } = await computePettyCashOnHand(f);
-      return { fund: f, cashOnHand, unreplenishedCount: unreplenished.length };
+      const { cashOnHand, unreplenished, available } = await computePettyCashOnHand(f);
+      return { fund: f, cashOnHand, unreplenishedCount: unreplenished.length, availableCount: available.length };
     }));
     document.getElementById('petty-cash-container').innerHTML = `
       <div class="card overflow-x-auto">
@@ -6023,11 +6034,11 @@ async function renderPettyCashPage() {
                 <td class="px-4 py-3 font-medium text-charcoal">${r.fund.nickname}</td>
                 <td class="px-4 py-3">${formatCurrency(r.fund.openingBalance)}</td>
                 <td class="px-4 py-3 font-medium ${r.cashOnHand < r.fund.openingBalance * 0.2 ? 'text-red-600' : 'text-charcoal'}">${formatCurrency(r.cashOnHand)}</td>
-                <td class="px-4 py-3">${r.unreplenishedCount}</td>
+                <td class="px-4 py-3">${r.unreplenishedCount}${r.unreplenishedCount > r.availableCount ? ` <span class="text-xs text-muted">(${r.unreplenishedCount - r.availableCount} already requested)</span>` : ''}</td>
                 <td class="px-4 py-3 text-right space-x-3">
                   <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="btn-glass-sm">New Voucher</a>
                   <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="btn-glass-sm">Vouchers</a>
-                  ${r.unreplenishedCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
+                  ${r.availableCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -6164,19 +6175,29 @@ async function renderPettyCashVouchersListPage(fundId) {
       <div class="card overflow-x-auto">
         <table class="w-full text-sm">
           <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Replenished</th><th class="px-4 py-3">Status</th>
+            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Replenishment</th><th class="px-4 py-3">Status</th>
           </tr></thead>
           <tbody>
-            ${vouchers.map(v => `
+            ${vouchers.map(v => {
+              let replHtml;
+              if (v.replenished) {
+                replHtml = `<span class="inline-flex items-center gap-1 text-xs font-medium text-forest">${icon('check-circle', 'w-3.5 h-3.5')} Replenished</span>`;
+              } else if (v.replenishmentRequestId) {
+                replHtml = `<a href="#/disbursement/vouchers/view/${v.replenishmentRequestId}" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100">Requested — ${escapeAttr(v.replenishmentRequestNumber || '')}</a>`;
+              } else {
+                replHtml = '<span class="text-xs text-muted">—</span>';
+              }
+              return `
               <tr class="border-b border-borderc last:border-0">
                 <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
                 <td class="px-4 py-3">${formatDate(v.date)}</td>
                 <td class="px-4 py-3">${v.category}</td>
                 <td class="px-4 py-3">${v.purpose || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
-                <td class="px-4 py-3">${v.replenished ? `${icon('check-circle', 'w-4 h-4 text-forest inline')}` : '—'}</td>
+                <td class="px-4 py-3">${replHtml}</td>
                 <td class="px-4 py-3">${statusBadge(v.status)}</td>
-              </tr>`).join('')}
+              </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No vouchers logged yet for this fund.</div>`;
@@ -6192,11 +6213,11 @@ async function renderNewReplenishmentPage(fundId) {
   try {
     const [fundData, all, banks] = await Promise.all([fetchFinanceDoc('bankAccounts', fundId), fetchFinanceCollection('pettyCashVouchers'), fetchActiveBankAccounts()]);
     fund = fundData;
-    unreplenished = all.filter(p => p.fundId === fundId && p.status === 'Paid' && !p.replenished);
+    unreplenished = all.filter(p => p.fundId === fundId && p.status === 'Paid' && !p.replenished && !p.replenishmentRequestId);
     realBankAccounts = banks.filter(b => b.accountType !== 'Cash');
   } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
   if (!fund) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
-  if (!unreplenished.length) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Nothing to replenish.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
+  if (!unreplenished.length) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Nothing to replenish.</p><p class="text-sm text-muted mt-1">Either every voucher is already replenished, or already part of a pending replenishment request.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
 
   const breakdown = {};
   unreplenished.forEach(p => { breakdown[p.category] = (breakdown[p.category] || 0) + (Number(p.amount) || 0); });
@@ -6297,7 +6318,10 @@ async function renderNewReplenishmentPage(fundId) {
       perr.classList.add('hidden');
       btn.disabled = true; btn.innerHTML = spinnerHtml();
       try {
-        await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: true });
+        const dvRef = await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: true });
+        for (const pcvId of draft.pcvIds) {
+          await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: dvRef.id, replenishmentRequestNumber: draft.number });
+        }
         refreshApprovalsBadge();
         navigateTo('disbursement/vouchers');
       } catch (err) {
