@@ -297,7 +297,7 @@ const NAV = [
       { name: "Chart of Accounts", path: "settings/chart-of-accounts", description: "Manage the company's account structure." },
       { name: "Tax Settings", path: "settings/tax", description: "Configure tax settings." },
       { name: "Numbering", path: "settings/numbering", description: "Configure document numbering schemes." },
-      { name: "Audit Logs", path: "settings/audit-logs", description: "Review system activity history." },
+      { name: "Activity Log", path: "settings/audit-logs", description: "Every account activity, with timestamp and date." },
     ]
   },
 ];
@@ -1081,6 +1081,10 @@ function renderRoute() {
   }
   if (path === 'settings/users-roles') {
     renderTeamsPage();
+    return;
+  }
+  if (path === 'settings/audit-logs') {
+    renderActivityLogPage();
     return;
   }
 
@@ -2870,7 +2874,7 @@ async function renderAPPaymentPage(id) {
 }
 
 /* ---- Expenses ---- */
-function expenseTableHtml(entries) {
+function expenseTableHtml(entries, vouchersBySource) {
   if (!entries.length) {
     return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
       <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
@@ -2884,16 +2888,31 @@ function expenseTableHtml(entries) {
           <th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
         </tr></thead>
         <tbody>
-          ${entries.map(e => `
-            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
-              <td class="px-4 py-3">${formatDate(e.date)}</td>
-              <td class="px-4 py-3">${e.category || '—'}</td>
-              <td class="px-4 py-3">${e.payee || '—'}</td>
-              <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
-              <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
-              <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${e.status === 'Paid' ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-amber-50 text-amber-700 border-amber-200'}">${e.status === 'Paid' ? 'Paid' : 'For Request Disbursement'}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
-            </tr>`).join('')}
+          ${entries.map(e => {
+            const dv = vouchersBySource ? vouchersBySource['expenses:' + e.id] : null;
+            let statusHtml, actionHtml;
+            if (e.status === 'Paid') {
+              statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-teal-50 text-teal-700 border-teal-200">Paid</span>`;
+              actionHtml = '<span class="text-xs text-muted">—</span>';
+            } else if (dv && (dv.status === 'Pending' || dv.status === 'Approved')) {
+              const cls = dv.status === 'Approved' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200';
+              statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}">${dvStatusLabel(dv.status)}</span>`;
+              actionHtml = `<a href="#/disbursement/vouchers/view/${dv.id}" class="text-forest hover:underline text-xs font-medium">View Request</a>`;
+            } else {
+              statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-gray-50 text-gray-600 border-gray-200">For Request Disbursement</span>`;
+              actionHtml = `<a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>`;
+            }
+            return `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3">${formatDate(e.date)}</td>
+                <td class="px-4 py-3">${e.category || '—'}</td>
+                <td class="px-4 py-3">${e.payee || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
+                <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
+                <td class="px-4 py-3">${statusHtml}</td>
+                <td class="px-4 py-3 text-right">${actionHtml}</td>
+              </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>`;
@@ -2975,15 +2994,22 @@ async function renderExpensesPage() {
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-xl font-semibold text-charcoal">Expenses</h1>
-        <p class="text-sm text-muted mt-1">Company expenses. Posts to the General Ledger once marked Paid.</p>
+        <p class="text-sm text-muted mt-1">Company expenses. Posts to the General Ledger once the Disbursement Voucher is paid.</p>
       </div>
       <a href="#/finance/expenses/new" class="btn-primary text-sm">+ New Expense</a>
     </div>
     <div id="exp-list-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
   try {
-    const entries = await fetchFinanceCollection('expenses');
-    document.getElementById('exp-list-container').innerHTML = expenseTableHtml(entries);
+    const [entries, vouchers] = await Promise.all([fetchFinanceCollection('expenses'), fetchFinanceCollection('disbursementVouchers')]);
+    const vouchersBySource = {};
+    vouchers.forEach(v => {
+      if (v.sourceCollection === 'expenses' && v.sourceId) {
+        const key = 'expenses:' + v.sourceId;
+        if (!vouchersBySource[key]) vouchersBySource[key] = v;
+      }
+    });
+    document.getElementById('exp-list-container').innerHTML = expenseTableHtml(entries, vouchersBySource);
     refreshIcons();
   } catch (e) {
     console.error(e);
@@ -5095,7 +5121,10 @@ async function renderCashForecastPage() {
    bankAccounts with accountType 'Cash')
    ========================================================================== */
 const DV_TYPES = ['Regular Payment', 'Petty Cash Replenishment', 'Cash Advance Release'];
-const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Cancelled'];
+// 'Rejected' is kept only as a legacy value some existing vouchers may
+// already have — it's no longer produced going forward, and displays
+// identically to Cancelled everywhere.
+const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Cancelled'];
 const CA_AGING_DAYS = 30;
 
 function canApproveDisbursements() {
@@ -5110,21 +5139,22 @@ async function generateSeriesNumber(collectionName, prefix, field) {
   return `${yearPrefix}${String(count + 1).padStart(4, '0')}`;
 }
 function dvStatusLabel(status) {
-  const map = { 'Pending': 'Pending for Approval' };
+  const map = { 'Pending': 'Pending Approval', 'Approved': 'Approved Request', 'Rejected': 'Cancelled' };
   return map[status] || status;
 }
 function dvStatusBadge(status) {
-  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusBadgeClass(status)}">${dvStatusLabel(status)}</span>`;
+  const cls = status === 'Rejected' ? statusBadgeClass('Cancelled') : statusBadgeClass(status);
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}">${dvStatusLabel(status)}</span>`;
 }
 function voucherStampHtml(status) {
   const map = {
     'Pending': { label: 'PENDING APPROVAL', cls: 'text-amber-500 border-amber-500' },
     'Pending Approval': { label: 'PENDING APPROVAL', cls: 'text-amber-500 border-amber-500' },
-    'Approved': { label: 'APPROVED', cls: 'text-blue-500 border-blue-500' },
+    'Approved': { label: 'APPROVED REQUEST', cls: 'text-blue-500 border-blue-500' },
     'Paid': { label: 'PAID', cls: 'text-forest border-forest' },
     'Outstanding': { label: 'OUTSTANDING', cls: 'text-orange-500 border-orange-500' },
     'Liquidated': { label: 'LIQUIDATED', cls: 'text-forest border-forest' },
-    'Rejected': { label: 'REJECTED', cls: 'text-red-500 border-red-500' },
+    'Rejected': { label: 'CANCELLED', cls: 'text-gray-400 border-gray-400' },
     'Cancelled': { label: 'CANCELLED', cls: 'text-gray-400 border-gray-400' },
   };
   const s = map[status] || map['Pending'];
@@ -5443,12 +5473,12 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
         <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
         ${v.approvedBy ? `<div><p class="text-xs text-muted uppercase">Approved By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.approvedBy)} · ${formatDate(v.dateApproved)}</p></div>` : ''}
-        ${v.rejectedBy ? `<div><p class="text-xs text-muted uppercase">Rejected By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.rejectedBy)} · ${formatDate(v.dateRejected)}</p></div>` : ''}
+        ${v.rejectedBy ? `<div><p class="text-xs text-muted uppercase">Cancelled By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.rejectedBy)} · ${formatDate(v.dateRejected)}</p></div>` : ''}
         ${v.cancelledBy ? `<div><p class="text-xs text-muted uppercase">Cancelled By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.cancelledBy)} · ${formatDate(v.dateCancelled)}</p></div>` : ''}
         ${v.datePaid ? `<div><p class="text-xs text-muted uppercase">Date Paid</p><p class="font-medium text-charcoal mt-0.5">${formatDate(v.datePaid)}</p></div>` : ''}
         ${v.batchId ? `<div><p class="text-xs text-muted uppercase">Encashment Batch</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.batchNumber || v.batchId)}</p></div>` : ''}
       </div>
-      ${v.rejectionReason ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-1">Reason for Rejection</p><p class="text-sm text-charcoal">${escapeAttr(v.rejectionReason)}</p></div>` : ''}
+      ${v.rejectionReason ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-1">Reason for Cancellation</p><p class="text-sm text-charcoal">${escapeAttr(v.rejectionReason)}</p></div>` : ''}
       ${v.cancellationReason ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-1">Reason for Cancellation</p><p class="text-sm text-charcoal">${escapeAttr(v.cancellationReason)}</p></div>` : ''}
       ${linesHtml ? `<div class="mt-4 pt-4 border-t border-borderc"><p class="text-xs text-muted uppercase mb-2">Breakdown</p>${linesHtml}</div>` : ''}
       <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
@@ -5508,12 +5538,12 @@ async function renderDisbursementVoucherDetailPage(id) {
   const errBox = document.getElementById('dv-detail-error');
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
+  const isRequester = !!(currentUser && v.requestedBy === currentUser.email);
   if (v.status === 'Pending' && canApproveDisbursements()) {
     buttons.push(`<button type="button" id="dv-approve-btn" class="btn-glass-sm text-sm">Approve</button>`);
-    buttons.push(`<button type="button" id="dv-reject-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Reject</button>`);
   }
-  if (v.status === 'Pending') {
-    buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm text-muted hover:text-charcoal">Cancel Request</button>`);
+  if (v.status === 'Pending' && (canApproveDisbursements() || isRequester)) {
+    buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Cancel</button>`);
   }
   if (v.status === 'Rejected' || v.status === 'Cancelled') {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
@@ -5543,24 +5573,6 @@ async function renderDisbursementVoucherDetailPage(id) {
       errBox.classList.remove('hidden');
       setBusy(false);
     }
-  });
-
-  document.getElementById('dv-reject-btn')?.addEventListener('click', () => {
-    showVoucherNotePrompt(promptBox, {
-      title: 'Reason for Rejection',
-      confirmLabel: 'Confirm Reject',
-      onConfirm: async (notes) => {
-        try {
-          await updateFinanceDoc('disbursementVouchers', id, { status: 'Rejected', rejectedBy: currentUser.email, dateRejected: todayISO(), rejectionReason: notes });
-          refreshApprovalsBadge();
-          renderDisbursementVoucherDetailPage(id);
-        } catch (e) {
-          console.error(e);
-          errBox.textContent = 'Could not reject this voucher. Please try again.';
-          errBox.classList.remove('hidden');
-        }
-      },
-    });
   });
 
   document.getElementById('dv-cancel-btn')?.addEventListener('click', () => {
@@ -5618,7 +5630,7 @@ async function renderEditDisbursementVoucherPage(id) {
       <p class="text-sm text-muted mt-1">${v.number} — ${escapeAttr(v.payee)}</p>
     </div>
     <div class="card p-4 max-w-2xl mb-4 bg-amber-50 border border-amber-200">
-      <p class="text-xs text-muted uppercase mb-1">Previously ${v.status}</p>
+      <p class="text-xs text-muted uppercase mb-1">Previously ${dvStatusLabel(v.status)}</p>
       <p class="text-sm text-charcoal">${escapeAttr(priorReason) || '—'}</p>
     </div>
     <form id="dv-edit-form" class="card p-6 space-y-4 max-w-2xl">
@@ -6634,6 +6646,73 @@ async function renderTeamsPage() {
     console.error(e);
     document.getElementById('teams-list-container').innerHTML = poLoadErrorHtml();
   }
+}
+
+/* ---- Activity Log (Settings) — every account activity, with timestamp ---- */
+async function renderActivityLogPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Activity Log</h1>
+      <p class="text-sm text-muted mt-1">Every account activity recorded across the system, with the exact time it was posted.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <input id="log-search" type="text" placeholder="Search description..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="log-account" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Accounts</option>
+        ${ACCOUNTS_CHART.map(a => `<option value="${a}">${a}</option>`).join('')}
+      </select>
+    </div>
+    <div id="log-totals" class="text-sm text-muted mb-3"></div>
+    <div id="log-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  let allEntries = [];
+  try {
+    allEntries = await fetchFinanceCollection('generalLedger');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('log-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+
+  const renderFiltered = () => {
+    const search = document.getElementById('log-search').value.trim().toLowerCase();
+    const account = document.getElementById('log-account').value;
+    const filtered = allEntries.filter(g => {
+      const matchesSearch = !search || (g.description || '').toLowerCase().includes(search);
+      const matchesAccount = !account || g.account === account;
+      return matchesSearch && matchesAccount;
+    });
+    document.getElementById('log-totals').textContent = `Showing ${filtered.length} activit${filtered.length === 1 ? 'y' : 'ies'}`;
+
+    document.getElementById('log-container').innerHTML = filtered.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Timestamp</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Account</th><th class="px-4 py-3">Description</th><th class="px-4 py-3 text-right">Debit</th><th class="px-4 py-3 text-right">Credit</th>
+          </tr></thead>
+          <tbody>
+            ${filtered.map(g => {
+              const ts = g.createdAt && g.createdAt.toDate ? g.createdAt.toDate() : null;
+              const tsLabel = ts ? ts.toLocaleString('en-PH', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+              return `
+                <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                  <td class="px-4 py-3 text-xs text-muted whitespace-nowrap">${tsLabel}</td>
+                  <td class="px-4 py-3">${formatDate(g.date)}</td>
+                  <td class="px-4 py-3 font-medium text-charcoal">${g.account}</td>
+                  <td class="px-4 py-3">${g.description || '—'}</td>
+                  <td class="px-4 py-3 text-right">${g.debit ? formatCurrency(g.debit) : ''}</td>
+                  <td class="px-4 py-3 text-right">${g.credit ? formatCurrency(g.credit) : ''}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No activity matches your filters.</div>`;
+  };
+
+  renderFiltered();
+  document.getElementById('log-search').addEventListener('input', renderFiltered);
+  document.getElementById('log-account').addEventListener('change', renderFiltered);
 }
 
 /* ==========================================================================
