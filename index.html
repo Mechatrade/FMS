@@ -1619,7 +1619,7 @@ function poTableHtml(pos, opts = {}) {
                 ` : statusBadge(po.status)}
               </td>
               <td class="px-4 py-3">${po.priority === 'Urgent' ? '<span class="text-red-600 font-medium">Urgent</span>' : 'Normal'}</td>
-              <td class="px-4 py-3 text-right"><a href="#/client-orders/view/${po.id}" class="text-forest hover:underline text-xs font-medium">View</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/client-orders/view/${po.id}" class="btn-glass-sm">View</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2520,7 +2520,7 @@ function arTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.amountPaid)}</td>
               <td class="px-4 py-3 font-medium">${formatCurrency(e.balance)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${arStatusBadgeClass(e.status)}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/ar/payment/${e.id}" class="text-forest hover:underline text-xs font-medium">Record Payment</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/finance/ar/payment/${e.id}" class="btn-glass-sm">Record Payment</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2718,7 +2718,7 @@ function apTableHtml(entries) {
               <td class="px-4 py-3 font-medium">${formatCurrency(e.balance)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${apStatusBadgeClass(e.status)}">${e.status}</span></td>
-              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/accountsPayable/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.status !== 'Paid' ? `<a href="#/disbursement/vouchers/new/accountsPayable/${e.id}" class="btn-glass-sm">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2917,10 +2917,10 @@ function expenseTableHtml(entries, vouchersBySource) {
             } else if (dv && (dv.status === 'Pending' || dv.status === 'Approved')) {
               const cls = dv.status === 'Approved' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200';
               statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}">${dvStatusLabel(dv.status)}</span>`;
-              actionHtml = `<a href="#/disbursement/vouchers/view/${dv.id}" class="text-forest hover:underline text-xs font-medium">View Request</a>`;
+              actionHtml = `<a href="#/disbursement/vouchers/view/${dv.id}" class="btn-glass-sm">View Request</a>`;
             } else {
               statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-gray-50 text-gray-600 border-gray-200">For Request Disbursement</span>`;
-              actionHtml = `<a href="#/finance/expenses/edit/${e.id}" class="text-forest hover:underline text-xs font-medium">Edit</a> · <a href="#/disbursement/vouchers/new/expenses/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>`;
+              actionHtml = `<a href="#/finance/expenses/edit/${e.id}" class="btn-glass-sm">Edit</a> <a href="#/disbursement/vouchers/new/expenses/${e.id}" class="btn-glass-sm">Request Disbursement</a>`;
             }
             return `
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
@@ -3347,7 +3347,7 @@ function taxTableHtml(entries) {
               <td class="px-4 py-3">${formatCurrency(e.taxAmount)}</td>
               <td class="px-4 py-3">${formatDate(e.dueDate)}</td>
               <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${taxFilingBadgeClass(e.filingStatus)}">${e.filingStatus}</span></td>
-              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<a href="#/disbursement/vouchers/new/taxRecords/${e.id}" class="text-forest hover:underline text-xs font-medium">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
+              <td class="px-4 py-3 text-right">${e.filingStatus !== 'Paid' ? `<a href="#/disbursement/vouchers/new/taxRecords/${e.id}" class="btn-glass-sm">Request Disbursement</a>` : '<span class="text-xs text-muted">—</span>'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -3617,7 +3617,7 @@ function supplierTableHtml(suppliers) {
               <td class="px-4 py-3">${Array.isArray(s.documents) && s.documents.length ? `<span class="inline-flex items-center gap-1 text-xs text-charcoal">${icon('paperclip', 'w-3.5 h-3.5 text-muted')} ${s.documents.length}</span>` : '<span class="text-xs text-muted">—</span>'}</td>
               <td class="px-4 py-3">${s.verified ? `<span class="inline-flex items-center gap-1 text-forest text-xs font-medium">${icon('check-circle', 'w-3.5 h-3.5')} Verified</span>` : '<span class="text-xs text-muted">—</span>'}</td>
               <td class="px-4 py-3">${statusBadge(s.status)}</td>
-              <td class="px-4 py-3 text-right"><a href="#/procurement/suppliers/edit/${s.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/suppliers/edit/${s.id}" class="btn-glass-sm">Edit</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -3909,7 +3909,7 @@ function prTableHtml(prs) {
                   ${PR_STATUSES.map(st => `<option value="${st}" ${p.status === st ? 'selected' : ''}>${st}</option>`).join('')}
                 </select>
               </td>
-              <td class="px-4 py-3 text-right"><a href="#/procurement/purchase-requests/edit/${p.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/purchase-requests/edit/${p.id}" class="btn-glass-sm">Edit</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -4119,7 +4119,7 @@ function supplierPOTableHtml(pos, opts = {}) {
                   </select>
                 ` : statusBadge(po.status)}
               </td>
-              <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-pos/edit/${po.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/procurement/supplier-pos/edit/${po.id}" class="btn-glass-sm">Edit</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -4645,7 +4645,7 @@ function bankAccountTableHtml(accounts, balances) {
               <td class="px-4 py-3">${b.accountType || '—'}</td>
               <td class="px-4 py-3 font-medium">${formatCurrency(balances ? balances[b.id] : b.openingBalance)}</td>
               <td class="px-4 py-3">${statusBadge(b.status)}</td>
-              <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-accounts/edit/${b.id}" class="text-forest hover:underline text-xs font-medium">Edit</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/cash-management/bank-accounts/edit/${b.id}" class="btn-glass-sm">Edit</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -5313,18 +5313,18 @@ const COMPANY_INFO = {
 };
 function voucherLetterheadHtml(docTitle, numberLabel, numberValue, status, dateLabel, dateValue) {
   return `
-    <div class="flex items-start justify-between gap-4 pb-4 border-b-2 border-orange-500">
-      <div class="flex items-start gap-3 min-w-0">
+    <div class="flex flex-wrap items-start justify-between gap-4 pb-4 border-b-2 border-orange-500">
+      <div class="flex items-start gap-3 max-w-[58%]">
         <img src="data:image/png;base64,${LOGO_MARK_B64}" alt="Mechatrade" class="w-12 h-12 object-contain shrink-0" />
-        <div class="min-w-0">
-          <p class="text-sm font-bold text-charcoal leading-tight">${COMPANY_INFO.name}</p>
-          <p class="text-[11px] text-muted leading-snug mt-1 max-w-xs">${COMPANY_INFO.address}</p>
+        <div>
+          <p class="text-sm font-bold text-charcoal leading-snug">${COMPANY_INFO.name}</p>
+          <p class="text-[11px] text-muted leading-snug mt-1">${COMPANY_INFO.address}</p>
           <p class="text-[11px] text-muted leading-snug">${COMPANY_INFO.email} · ${COMPANY_INFO.website}</p>
           <p class="text-[11px] text-muted leading-snug">${COMPANY_INFO.tin}</p>
         </div>
       </div>
-      <div class="text-right shrink-0">
-        <p class="text-lg font-bold text-charcoal tracking-wide uppercase">${docTitle}</p>
+      <div class="text-right max-w-[38%]">
+        <p class="text-base font-bold text-charcoal tracking-wide uppercase leading-snug">${docTitle}</p>
         <div class="mt-2 space-y-0.5 text-xs">
           <p><span class="text-muted">${numberLabel}</span> <span class="font-medium text-charcoal">${numberValue}</span></p>
           <p><span class="text-muted">Status</span> <span class="font-medium text-charcoal">${status}</span></p>
@@ -5424,7 +5424,7 @@ function dvTableHtml(vouchers) {
               <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
               <td class="px-4 py-3">${formatDate(v.dateRequested)}</td>
               <td class="px-4 py-3">${dvStatusBadge(v.status)}</td>
-              <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="text-forest hover:underline text-xs font-medium">View</a></td>
+              <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="btn-glass-sm">View</a></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -5542,7 +5542,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     wrap.innerHTML = `
       <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', draft.number, 'Pending', 'Date Requested', formatDate(draft.dateRequested))}
+        ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', draft.number, dvStatusLabel('Pending'), 'Date Requested', formatDate(draft.dateRequested))}
         <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
@@ -5988,9 +5988,9 @@ async function renderPettyCashPage() {
                 <td class="px-4 py-3 font-medium ${r.cashOnHand < r.fund.openingBalance * 0.2 ? 'text-red-600' : 'text-charcoal'}">${formatCurrency(r.cashOnHand)}</td>
                 <td class="px-4 py-3">${r.unreplenishedCount}</td>
                 <td class="px-4 py-3 text-right space-x-3">
-                  <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">New Voucher</a>
-                  <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">Vouchers</a>
-                  ${r.unreplenishedCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="text-forest hover:underline text-xs font-medium">Replenish</a>` : ''}
+                  <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="btn-glass-sm">New Voucher</a>
+                  <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="btn-glass-sm">Vouchers</a>
+                  ${r.unreplenishedCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -6219,7 +6219,7 @@ async function renderNewReplenishmentPage(fundId) {
     wrap.innerHTML = `
       <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        ${voucherLetterheadHtml('Disbursement Voucher — Petty Cash Replenishment', 'DV No.', draft.number, 'Pending', 'Date Requested', formatDate(draft.dateRequested))}
+        ${voucherLetterheadHtml('Petty Cash Replenishment', 'DV No.', draft.number, dvStatusLabel('Pending'), 'Date Requested', formatDate(draft.dateRequested))}
         <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
           <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
@@ -6300,8 +6300,8 @@ async function renderCashAdvancesPage() {
                 <td class="px-4 py-3">${formatDate(a.dateReleased)}</td>
                 <td class="px-4 py-3">${statusBadge(a.status)}${caAgingBadge(a)}</td>
                 <td class="px-4 py-3 text-right">
-                  <a href="#/disbursement/cash-advances/view/${a.id}" class="text-forest hover:underline text-xs font-medium">View</a>
-                  ${a.status === 'Outstanding' ? ` · <a href="#/disbursement/cash-advances/liquidate/${a.id}" class="text-forest hover:underline text-xs font-medium">Liquidate</a>` : ''}
+                  <a href="#/disbursement/cash-advances/view/${a.id}" class="btn-glass-sm">View</a>
+                  ${a.status === 'Outstanding' ? ` <a href="#/disbursement/cash-advances/liquidate/${a.id}" class="btn-glass-sm">Liquidate</a>` : ''}
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -6367,7 +6367,7 @@ async function renderNewCashAdvancePage() {
     wrap.innerHTML = `
       <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
         ${voucherStampHtml('Pending')}
-        ${voucherLetterheadHtml('Cash Advance Request', 'CA No.', `${draft.caNumber} · DV ${draft.dvNumber}`, 'Pending', 'Date', formatDate(draft.date))}
+        ${voucherLetterheadHtml('Cash Advance Request', 'CA No.', `${draft.caNumber} · DV ${draft.dvNumber}`, dvStatusLabel('Pending'), 'Date', formatDate(draft.date))}
         <div class="grid grid-cols-2 gap-4 text-sm mt-6">
           <div><p class="text-xs text-muted uppercase">Employee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
@@ -6680,7 +6680,7 @@ async function renderApprovalsPage() {
                 <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
                 <td class="px-4 py-3">${v.requestedBy || '—'}</td>
                 <td class="px-4 py-3">${formatDate(v.dateRequested)}</td>
-                <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="text-forest hover:underline text-xs font-medium">Review</a></td>
+                <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="btn-glass-sm">Review</a></td>
               </tr>`).join('')}
           </tbody>
         </table>
