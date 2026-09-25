@@ -5390,7 +5390,7 @@ async function executeRegularPaymentDV(dv) {
   }
 }
 async function executeReplenishmentDV(dv) {
-  const { accountTitleBreakdown, bankAccountName, bankAccountId, datePaid, number, pcvIds, id, batchId } = dv;
+  const { accountTitleBreakdown, bankAccountName, bankAccountId, datePaid, number, pcvIds, id, batchId, batchNumber } = dv;
   const glLines = (accountTitleBreakdown || []).map(item => ({
     date: datePaid, account: item.account, debit: item.amount, credit: 0,
     description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id,
@@ -5398,7 +5398,10 @@ async function executeReplenishmentDV(dv) {
   glLines.push({ date: datePaid, account: bankAccountName, debit: 0, credit: dv.amount, description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id, bankAccountId });
   await postGLEntries(glLines);
   for (const pcvId of (pcvIds || [])) {
-    await updateFinanceDoc('pettyCashVouchers', pcvId, { replenished: true, replenishmentBatchId: batchId || null });
+    await updateFinanceDoc('pettyCashVouchers', pcvId, {
+      replenished: true, replenishmentBatchId: batchId || null,
+      replenishmentBatchNumber: batchNumber || null, replenishedDate: datePaid,
+    });
   }
 }
 async function executeCashAdvanceReleaseDV(dv) {
@@ -5964,13 +5967,22 @@ async function renderEncashmentBatchPage() {
         const selectedVouchers = pending.filter(v => selectedIds.includes(v.id));
         const totalAmount = selectedVouchers.reduce((s, v) => s + (Number(v.amount) || 0), 0);
         const batchNumber = await generateSeriesNumber('encashmentBatches', 'ENC', 'number');
+        const pcvLookup = {};
+        try {
+          (await fetchFinanceCollection('pettyCashVouchers')).forEach(p => { pcvLookup[p.id] = p.number; });
+        } catch (e) { console.error(e); }
         const batchRef = await createFinanceDoc('encashmentBatches', {
           number: batchNumber, batchDate,
-          voucherRefs: selectedVouchers.map(v => ({ id: v.id, type: v.type, number: v.number, amount: v.amount, accountTitleBreakdown: v.accountTitleBreakdown || [{ account: v.accountTitle, amount: v.amount }] })),
+          voucherRefs: selectedVouchers.map(v => ({
+            id: v.id, type: v.type, number: v.number, amount: v.amount,
+            accountTitleBreakdown: v.accountTitleBreakdown || [{ account: v.accountTitle, amount: v.amount }],
+            pcvIds: v.pcvIds || null,
+            pcvNumbers: v.pcvIds ? v.pcvIds.map(id => pcvLookup[id]).filter(Boolean) : null,
+          })),
           totalAmount, processedBy: currentUser.email, status: 'Processed',
         });
         for (const v of selectedVouchers) {
-          await executeDisbursementVoucher({ ...v, datePaid: batchDate, batchId: batchRef.id });
+          await executeDisbursementVoucher({ ...v, datePaid: batchDate, batchId: batchRef.id, batchNumber });
           await updateFinanceDoc('disbursementVouchers', v.id, { status: 'Paid', datePaid: batchDate, batchId: batchRef.id, batchNumber });
         }
         refreshApprovalsBadge();
@@ -6175,7 +6187,7 @@ async function renderPettyCashVouchersListPage(fundId) {
       <div class="card overflow-x-auto">
         <table class="w-full text-sm">
           <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Replenishment</th><th class="px-4 py-3">Status</th>
+            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">PCV Request Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Replenishment</th><th class="px-4 py-3">Replenished Date</th>
           </tr></thead>
           <tbody>
             ${vouchers.map(v => {
@@ -6187,6 +6199,9 @@ async function renderPettyCashVouchersListPage(fundId) {
               } else {
                 replHtml = '<span class="text-xs text-muted">—</span>';
               }
+              const replDateHtml = v.replenished
+                ? `<p class="text-charcoal">${formatDate(v.replenishedDate)}</p>${v.replenishmentBatchNumber ? `<p class="text-xs text-muted">${escapeAttr(v.replenishmentBatchNumber)}</p>` : ''}`
+                : '<span class="text-xs text-muted">—</span>';
               return `
               <tr class="border-b border-borderc last:border-0">
                 <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
@@ -6194,8 +6209,9 @@ async function renderPettyCashVouchersListPage(fundId) {
                 <td class="px-4 py-3">${v.category}</td>
                 <td class="px-4 py-3">${v.purpose || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
-                <td class="px-4 py-3">${replHtml}</td>
                 <td class="px-4 py-3">${statusBadge(v.status)}</td>
+                <td class="px-4 py-3">${replHtml}</td>
+                <td class="px-4 py-3">${replDateHtml}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -6711,8 +6727,11 @@ async function renderEncashmentSummaryPage() {
               <tbody>
                 ${(b.voucherRefs || []).map(v => `
                   <tr class="border-t border-borderc">
-                    <td class="py-1.5 text-charcoal">${v.number} — ${v.type}</td>
-                    <td class="py-1.5 text-right w-28">${formatCurrency(v.amount)}</td>
+                    <td class="py-1.5 text-charcoal">
+                      ${v.number} — ${v.type}
+                      ${v.pcvNumbers && v.pcvNumbers.length ? `<div class="text-muted mt-0.5">Covers: ${v.pcvNumbers.join(', ')}</div>` : ''}
+                    </td>
+                    <td class="py-1.5 text-right w-28 align-top">${formatCurrency(v.amount)}</td>
                   </tr>`).join('')}
               </tbody>
             </table>
