@@ -1087,6 +1087,18 @@ function renderRoute() {
     renderActivityLogPage();
     return;
   }
+  if (path === 'settings/numbering') {
+    renderNumberingSettingsPage();
+    return;
+  }
+  if (path === 'settings/chart-of-accounts') {
+    renderChartOfAccountsPage();
+    return;
+  }
+  if (path === 'settings/approval-rules') {
+    renderApprovalRulesPage();
+    return;
+  }
 
   const title = child ? child.name : item.name;
   const description = child ? child.description : item.description;
@@ -5127,16 +5139,54 @@ const DV_TYPES = ['Regular Payment', 'Petty Cash Replenishment', 'Cash Advance R
 const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Cancelled'];
 const CA_AGING_DAYS = 30;
 
-function canApproveDisbursements() {
-  const approverRoles = ['system_admin', 'finance_manager', 'super_admin', 'admin', 'management'];
-  return !!(currentProfile && approverRoles.includes(currentProfile.role));
+let approvalRulesCache = { financeManagerLimit: null };
+async function loadApprovalRules() {
+  try {
+    const cfg = await fetchFinanceDoc('settings', 'approvalRules');
+    if (cfg) approvalRulesCache = { financeManagerLimit: cfg.financeManagerLimit != null ? cfg.financeManagerLimit : null };
+  } catch (e) { console.error(e); }
 }
-async function generateSeriesNumber(collectionName, prefix, field) {
+// amount is optional: omit it for a general "can this role ever approve"
+// check (page/badge visibility); pass the voucher's amount to enforce the
+// configurable Finance Manager peso limit from Settings > Approval Rules.
+// System Admin (and legacy super_admin/admin) is never limited.
+function canApproveDisbursements(amount) {
+  if (!currentProfile) return false;
+  const role = currentProfile.role;
+  const fullApprovers = ['system_admin', 'super_admin', 'admin'];
+  const limitedApprovers = ['finance_manager', 'management'];
+  if (fullApprovers.includes(role)) return true;
+  if (limitedApprovers.includes(role)) {
+    if (amount == null) return true;
+    const limit = approvalRulesCache.financeManagerLimit;
+    return limit == null || amount <= limit;
+  }
+  return false;
+}
+const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'pettyCashVouchers': 'PCV', 'cashAdvances': 'CA', 'encashmentBatches': 'ENC' };
+async function getNumberingConfig(seriesKey, defaultPrefix) {
+  let cfg;
+  try {
+    cfg = await fetchFinanceDoc('numberingSeries', seriesKey);
+  } catch (e) { console.error(e); }
+  return { prefix: (cfg && cfg.prefix) || defaultPrefix, nextNumber: (cfg && cfg.nextNumber) || 1 };
+}
+async function consumeNextNumber(seriesKey, defaultPrefix) {
   const year = new Date().getFullYear();
-  const all = await fetchFinanceCollection(collectionName);
-  const yearPrefix = `${prefix}-${year}-`;
-  const count = all.filter(d => (d[field] || '').startsWith(yearPrefix)).length;
-  return `${yearPrefix}${String(count + 1).padStart(4, '0')}`;
+  const cfg = await getNumberingConfig(seriesKey, defaultPrefix);
+  const formatted = `${cfg.prefix}-${year}-${String(cfg.nextNumber).padStart(4, '0')}`;
+  await setDoc(doc(db, 'numberingSeries', seriesKey), {
+    prefix: cfg.prefix, nextNumber: cfg.nextNumber + 1,
+    updatedAt: serverTimestamp(), updatedBy: currentUser ? currentUser.email : null,
+  }, { merge: true });
+  return formatted;
+}
+// Legacy signature kept as a thin wrapper so every existing call site
+// (which passes the Firestore collection name) keeps working unchanged —
+// it just maps that collection name to the right numbering series.
+async function generateSeriesNumber(collectionName, defaultPrefix) {
+  const seriesKey = NUMBERING_SERIES_KEYS[collectionName] || defaultPrefix;
+  return consumeNextNumber(seriesKey, defaultPrefix);
 }
 function dvStatusLabel(status) {
   const map = { 'Pending': 'Pending Approval', 'Approved': 'Approved Request', 'Rejected': 'Cancelled' };
@@ -5539,7 +5589,8 @@ async function renderDisbursementVoucherDetailPage(id) {
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
   const isRequester = !!(currentUser && v.requestedBy === currentUser.email);
-  if (v.status === 'Pending' && canApproveDisbursements()) {
+  const overLimitForRole = v.status === 'Pending' && canApproveDisbursements() && !canApproveDisbursements(v.amount);
+  if (v.status === 'Pending' && canApproveDisbursements(v.amount)) {
     buttons.push(`<button type="button" id="dv-approve-btn" class="btn-glass-sm text-sm">Approve</button>`);
   }
   if (v.status === 'Pending' && (canApproveDisbursements() || isRequester)) {
@@ -5550,6 +5601,9 @@ async function renderDisbursementVoucherDetailPage(id) {
   }
   buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
   actions.innerHTML = buttons.join('');
+  if (overLimitForRole) {
+    promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">This amount is above your approval limit — a System Admin needs to approve it.</p>`;
+  }
   refreshIcons();
 
   const setBusy = (busy) => { actions.querySelectorAll('button').forEach(b => b.disabled = busy); };
@@ -6715,6 +6769,287 @@ async function renderActivityLogPage() {
   document.getElementById('log-account').addEventListener('change', renderFiltered);
 }
 
+/* ---- Numbering (Settings) — editable prefix + resettable counter per series ---- */
+const NUMBERING_SERIES_DEFAULTS = [
+  { key: 'DV', label: 'Disbursement Vouchers', defaultPrefix: 'DV' },
+  { key: 'PCV', label: 'Petty Cash Vouchers', defaultPrefix: 'PCV' },
+  { key: 'CA', label: 'Cash Advances', defaultPrefix: 'CA' },
+  { key: 'ENC', label: 'Encashment Batches', defaultPrefix: 'ENC' },
+];
+async function renderNumberingSettingsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Numbering</h1>
+      <p class="text-sm text-muted mt-1">Document number format: PREFIX-YEAR-#### (e.g. DV-2026-0001). Editing the prefix or the next number only affects numbers issued from now on — nothing already saved changes.</p>
+    </div>
+    <div id="numbering-container" class="space-y-4 max-w-2xl">Loading...</div>`);
+  refreshIcons();
+  try {
+    const configs = await Promise.all(NUMBERING_SERIES_DEFAULTS.map(s => getNumberingConfig(s.key, s.defaultPrefix)));
+    document.getElementById('numbering-container').innerHTML = NUMBERING_SERIES_DEFAULTS.map((s, i) => `
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-sm font-semibold text-charcoal">${s.label}</p>
+          <p class="text-xs text-muted">Next: ${configs[i].prefix}-${new Date().getFullYear()}-${String(configs[i].nextNumber).padStart(4, '0')}</p>
+        </div>
+        <form data-numbering-form="${s.key}" class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+          <div>
+            <label class="block text-xs font-medium text-charcoal mb-1">Prefix</label>
+            <input type="text" class="numbering-prefix w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" value="${escapeAttr(configs[i].prefix)}" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-charcoal mb-1">Next Number</label>
+            <input type="number" min="1" class="numbering-next w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" value="${configs[i].nextNumber}" />
+          </div>
+          <button type="submit" class="btn-glass-sm text-sm">Save</button>
+        </form>
+      </div>`).join('');
+    refreshIcons();
+
+    document.querySelectorAll('[data-numbering-form]').forEach(form => {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const key = form.getAttribute('data-numbering-form');
+        const prefix = form.querySelector('.numbering-prefix').value.trim().toUpperCase();
+        const nextNumber = Number(form.querySelector('.numbering-next').value) || 1;
+        const btn = form.querySelector('button[type="submit"]');
+        if (!prefix) return;
+        btn.disabled = true;
+        try {
+          await setDoc(doc(db, 'numberingSeries', key), { prefix, nextNumber, updatedAt: serverTimestamp(), updatedBy: currentUser ? currentUser.email : null }, { merge: true });
+          renderNumberingSettingsPage();
+        } catch (err) {
+          console.error(err);
+          alert('Could not save. Please try again.');
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (e) {
+    console.error(e);
+    document.getElementById('numbering-container').innerHTML = poLoadErrorHtml();
+  }
+}
+
+/* ---- Chart of Accounts (Settings) — Firestore-backed, fully editable ---- */
+const ACCOUNT_TYPES = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'];
+const COA_SEED = [
+  { name: 'Cash', type: 'Asset' },
+  { name: 'Accounts Receivable', type: 'Asset' },
+  { name: 'Accounts Payable', type: 'Liability' },
+  { name: 'Advances to Employees', type: 'Asset' },
+  { name: "Owner's Capital", type: 'Equity' },
+  { name: "Owner's Drawings", type: 'Equity' },
+  { name: 'Sales Revenue', type: 'Revenue' },
+  { name: 'Other Income', type: 'Revenue' },
+  { name: 'Utilities Expense', type: 'Expense' },
+  { name: 'Rent Expense', type: 'Expense' },
+  { name: 'Salaries Expense', type: 'Expense' },
+  { name: 'Supplies Expense', type: 'Expense' },
+  { name: 'Transportation Expense', type: 'Expense' },
+  { name: 'Professional Fees Expense', type: 'Expense' },
+  { name: 'Repairs & Maintenance Expense', type: 'Expense' },
+  { name: 'Taxes & Licenses Expense', type: 'Expense' },
+  { name: 'Miscellaneous Expense', type: 'Expense' },
+];
+let coaSeeded = false;
+async function ensureChartOfAccountsSeeded() {
+  if (coaSeeded) return;
+  try {
+    const existing = await fetchFinanceCollection('chartOfAccounts');
+    if (!existing.length) {
+      for (const acc of COA_SEED) {
+        await createFinanceDoc('chartOfAccounts', { name: acc.name, type: acc.type, status: 'Active', isSystem: true });
+      }
+    }
+  } catch (e) { console.error(e); }
+  coaSeeded = true;
+}
+function applyAccountsChart(accounts) {
+  const active = accounts.filter(a => a.status !== 'Inactive');
+  const names = active.map(a => a.name);
+  ACCOUNTS_CHART.length = 0;
+  ACCOUNTS_CHART.push(...names);
+  EXPENSE_ACCOUNTS.length = 0;
+  EXPENSE_ACCOUNTS.push(...active.filter(a => a.type === 'Expense').map(a => a.name));
+  CASH_OFFSET_ACCOUNTS.length = 0;
+  CASH_OFFSET_ACCOUNTS.push(...ACCOUNTS_CHART.filter(a => a !== 'Cash'));
+}
+async function refreshAccountsChartFromFirestore() {
+  await ensureChartOfAccountsSeeded();
+  try {
+    const accounts = await fetchFinanceCollection('chartOfAccounts');
+    if (accounts.length) applyAccountsChart(accounts);
+  } catch (e) { console.error(e); }
+}
+async function renderChartOfAccountsPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Chart of Accounts</h1>
+        <p class="text-sm text-muted mt-1">Used throughout Finance, Cash Management, and Disbursement. Renaming an account only affects new activity — past General Ledger entries keep the name they were posted under.</p>
+      </div>
+      <button id="coa-add-btn" type="button" class="btn-primary text-sm">+ Add Account</button>
+    </div>
+    <div id="coa-add-form-wrap" class="hidden mb-6"></div>
+    <div id="coa-list-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  await ensureChartOfAccountsSeeded();
+  let accounts = [];
+  try {
+    accounts = await fetchFinanceCollection('chartOfAccounts');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('coa-list-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+  accounts.sort((a, b) => a.name.localeCompare(b.name));
+
+  document.getElementById('coa-list-container').innerHTML = `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+        </tr></thead>
+        <tbody>
+          ${accounts.map(a => `
+            <tr class="border-b border-borderc last:border-0" data-coa-row="${a.id}">
+              <td class="px-4 py-3">
+                <input type="text" class="coa-name-input w-full rounded-md border border-borderc bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest" value="${escapeAttr(a.name)}" />
+              </td>
+              <td class="px-4 py-3">
+                <select class="coa-type-select text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                  ${ACCOUNT_TYPES.map(t => `<option value="${t}" ${a.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+                </select>
+              </td>
+              <td class="px-4 py-3">
+                <select class="coa-status-select text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+                  <option value="Active" ${a.status !== 'Inactive' ? 'selected' : ''}>Active</option>
+                  <option value="Inactive" ${a.status === 'Inactive' ? 'selected' : ''}>Inactive</option>
+                </select>
+              </td>
+              <td class="px-4 py-3 text-right">
+                <button type="button" class="coa-save-btn btn-glass-sm text-xs">Save</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  refreshIcons();
+
+  document.querySelectorAll('[data-coa-row]').forEach(row => {
+    const id = row.getAttribute('data-coa-row');
+    row.querySelector('.coa-save-btn').addEventListener('click', async () => {
+      const btn = row.querySelector('.coa-save-btn');
+      const name = row.querySelector('.coa-name-input').value.trim();
+      const type = row.querySelector('.coa-type-select').value;
+      const status = row.querySelector('.coa-status-select').value;
+      if (!name) return;
+      btn.disabled = true; btn.textContent = 'Saving...';
+      try {
+        await updateFinanceDoc('chartOfAccounts', id, { name, type, status });
+        await refreshAccountsChartFromFirestore();
+        renderChartOfAccountsPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not save this account. Please try again.');
+        btn.disabled = false; btn.textContent = 'Save';
+      }
+    });
+  });
+
+  document.getElementById('coa-add-btn').addEventListener('click', () => {
+    const wrap = document.getElementById('coa-add-form-wrap');
+    if (!wrap.classList.contains('hidden')) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+    wrap.classList.remove('hidden');
+    wrap.innerHTML = `
+      <div class="card p-5 max-w-xl">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-charcoal mb-1">Account Name</label>
+            <input id="coa-new-name" type="text" class="w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-charcoal mb-1">Type</label>
+            <select id="coa-new-type" class="w-full rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+              ${ACCOUNT_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <button id="coa-new-save" type="button" class="btn-primary text-sm mt-3">Add Account</button>
+      </div>`;
+    refreshIcons();
+    document.getElementById('coa-new-save').addEventListener('click', async () => {
+      const name = document.getElementById('coa-new-name').value.trim();
+      const type = document.getElementById('coa-new-type').value;
+      if (!name) return;
+      const btn = document.getElementById('coa-new-save');
+      btn.disabled = true; btn.innerHTML = spinnerHtml();
+      try {
+        await createFinanceDoc('chartOfAccounts', { name, type, status: 'Active', isSystem: false });
+        await refreshAccountsChartFromFirestore();
+        renderChartOfAccountsPage();
+      } catch (e) {
+        console.error(e);
+        alert('Could not add this account. Please try again.');
+        btn.disabled = false; btn.textContent = 'Add Account';
+      }
+    });
+  });
+}
+
+/* ---- Approval Rules (Settings) — configurable Finance Manager peso limit ---- */
+async function renderApprovalRulesPage() {
+  await loadApprovalRules();
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Approval Rules</h1>
+      <p class="text-sm text-muted mt-1">System Admin can always approve any amount. Set a peso limit for Finance Manager — requests above it will only show an Approve button to a System Admin.</p>
+    </div>
+    <form id="rules-form" class="card p-6 space-y-4 max-w-md">
+      <div id="rules-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="flex items-center gap-2">
+        <input id="rules-no-limit" type="checkbox" class="rounded border-borderc text-forest focus:ring-forest" ${approvalRulesCache.financeManagerLimit == null ? 'checked' : ''} />
+        <label for="rules-no-limit" class="text-sm text-charcoal">No limit (Finance Manager can approve any amount)</label>
+      </div>
+      <div id="rules-limit-wrap" class="${approvalRulesCache.financeManagerLimit == null ? 'hidden' : ''}">
+        ${numberField('financeManagerLimit', 'Finance Manager Approval Limit (₱)', { step: '0.01', value: approvalRulesCache.financeManagerLimit || '' })}
+      </div>
+      <button id="rules-submit" type="submit" class="btn-primary text-sm"><span id="rules-submit-text">Save</span></button>
+    </form>`);
+  refreshIcons();
+
+  const noLimitCheckbox = document.getElementById('rules-no-limit');
+  const limitWrap = document.getElementById('rules-limit-wrap');
+  noLimitCheckbox.addEventListener('change', () => {
+    limitWrap.classList.toggle('hidden', noLimitCheckbox.checked);
+  });
+
+  document.getElementById('rules-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('rules-submit');
+    const btnText = document.getElementById('rules-submit-text');
+    const errBox = document.getElementById('rules-form-error');
+    errBox.classList.add('hidden');
+    const noLimit = noLimitCheckbox.checked;
+    const limitField = document.getElementById('field-financeManagerLimit');
+    const limitValue = noLimit ? null : (Number(limitField.value) || 0);
+
+    btn.disabled = true; btnText.innerHTML = spinnerHtml();
+    try {
+      await setDoc(doc(db, 'settings', 'approvalRules'), { financeManagerLimit: limitValue, updatedAt: serverTimestamp(), updatedBy: currentUser ? currentUser.email : null }, { merge: true });
+      approvalRulesCache = { financeManagerLimit: limitValue };
+      renderApprovalRulesPage();
+    } catch (err) {
+      console.error(err);
+      errBox.textContent = 'Could not save. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false; btnText.textContent = 'Save';
+    }
+  });
+}
+
 /* ==========================================================================
    AUTH BOOTSTRAP
    ========================================================================== */
@@ -6774,6 +7109,8 @@ async function bootstrap() {
       }
       renderShell();
       initRouter();
+      refreshAccountsChartFromFirestore();
+      loadApprovalRules();
     } else {
       currentUser = null;
       currentProfile = null;
