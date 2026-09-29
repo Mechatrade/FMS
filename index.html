@@ -658,10 +658,17 @@ function headerHtml() {
         <nav id="breadcrumb" class="text-sm text-muted truncate"></nav>
       </div>
       <div class="flex items-center gap-3">
-        <button class="relative p-2 text-muted hover:text-charcoal rounded-md hover:bg-cream" title="Notifications (placeholder)">
-          ${icon('bell', 'w-5 h-5')}
-          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-forest"></span>
-        </button>
+        <div class="relative">
+          <button id="notif-bell-btn" class="relative p-2 text-muted hover:text-charcoal rounded-md hover:bg-cream" title="Notifications">
+            ${icon('bell', 'w-5 h-5')}
+            <span id="notif-badge"></span>
+          </button>
+          <div id="notif-panel" class="hidden absolute right-0 mt-2 w-80 bg-white border border-borderc rounded-md shadow-card z-50 max-h-96 overflow-y-auto">
+            <div id="notif-panel-body">
+              <p class="px-3 py-4 text-xs text-muted text-center">Loading...</p>
+            </div>
+          </div>
+        </div>
         <div class="relative">
           <button id="header-profile-btn" class="flex items-center gap-2 pl-2 pr-1 py-1 rounded-md hover:bg-cream">
             <div class="text-right hidden sm:block">
@@ -700,14 +707,60 @@ function renderShell() {
 
 async function refreshApprovalsBadge() {
   const badgeEl = document.getElementById('nav-badge-approvals');
-  if (!badgeEl || !canApproveDisbursements()) return;
-  try {
-    const vouchers = await fetchFinanceCollection('disbursementVouchers');
-    const count = vouchers.filter(v => v.status === 'Pending').length;
-    badgeEl.innerHTML = count > 0 ? `<span class="nav-badge">${count}</span>` : '';
-  } catch (e) {
-    console.error(e);
+  if (badgeEl && canApproveDisbursements()) {
+    try {
+      const vouchers = await fetchFinanceCollection('disbursementVouchers');
+      const count = vouchers.filter(v => v.status === 'Pending').length;
+      badgeEl.innerHTML = count > 0 ? `<span class="nav-badge">${count}</span>` : '';
+    } catch (e) {
+      console.error(e);
+    }
   }
+  refreshNotificationBell();
+}
+let notificationCache = { pendingDVs: [], recentSalesOrders: [] };
+function notificationPanelBodyHtml() {
+  const { pendingDVs, recentSalesOrders } = notificationCache;
+  const approvalsSection = canApproveDisbursements() ? `
+    <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Approvals</p></div>
+    ${pendingDVs.length ? pendingDVs.slice(0, 6).map(v => `
+      <a href="#/disbursement/vouchers/view/${v.id}" class="block px-3 py-2 hover:bg-cream border-b border-borderc">
+        <p class="text-sm text-charcoal">${v.number} — ${escapeAttr(v.payee || v.type)}</p>
+        <p class="text-xs text-muted">${formatCurrency(v.amount)} · awaiting your approval</p>
+      </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">Nothing pending approval.</p>`}` : '';
+  const crmSection = crmReady ? `
+    <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">New Sales Orders (CRM)</p></div>
+    ${recentSalesOrders.length ? recentSalesOrders.map(so => `
+      <a href="#/client-orders/new-po" class="block px-3 py-2 hover:bg-cream border-b border-borderc last:border-0">
+        <p class="text-sm text-charcoal">${escapeAttr(so.controlNo || so.orderNo || 'Sales Order')} — ${escapeAttr((so.billedTo && so.billedTo.name) || 'Unknown Client')}</p>
+        <p class="text-xs text-muted">${so.total != null ? formatCurrency(so.total) + ' · ' : ''}Pull into a Client PO</p>
+      </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted">No recent sales orders.</p>`}` : '';
+  if (!approvalsSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
+  return approvalsSection + crmSection;
+}
+async function refreshNotificationBell() {
+  const badgeEl = document.getElementById('notif-badge');
+  const bodyEl = document.getElementById('notif-panel-body');
+  if (!badgeEl) return;
+  let pendingDVs = [];
+  if (canApproveDisbursements()) {
+    try {
+      const vouchers = await fetchFinanceCollection('disbursementVouchers');
+      pendingDVs = vouchers.filter(v => v.status === 'Pending');
+    } catch (e) { console.error(e); }
+  }
+  let recentSalesOrders = [];
+  if (crmReady) {
+    try {
+      recentSalesOrders = await fetchRecentCRMSalesOrders(5);
+    } catch (e) { console.error(e); }
+  }
+  notificationCache = { pendingDVs, recentSalesOrders };
+  const recentCutoffMs = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const newSalesOrderCount = recentSalesOrders.filter(so => salesOrderTimestampMs(so) >= recentCutoffMs).length;
+  const total = pendingDVs.length + newSalesOrderCount;
+  badgeEl.innerHTML = total > 0 ? `<span class="nav-badge" style="position:absolute;top:2px;right:2px;">${total}</span>` : '';
+  if (bodyEl) { bodyEl.innerHTML = notificationPanelBodyHtml(); refreshIcons(); }
 }
 
 function applyUserToChrome() {
@@ -743,6 +796,16 @@ function wireShellEvents() {
     document.getElementById('header-profile-menu')?.classList.toggle('hidden');
   });
   document.addEventListener('click', () => document.getElementById('header-profile-menu')?.classList.add('hidden'));
+
+  document.getElementById('notif-bell-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const panel = document.getElementById('notif-panel');
+    const willOpen = panel?.classList.contains('hidden');
+    panel?.classList.toggle('hidden');
+    if (willOpen) refreshNotificationBell();
+  });
+  document.addEventListener('click', () => document.getElementById('notif-panel')?.classList.add('hidden'));
+  document.getElementById('notif-panel')?.addEventListener('click', (e) => e.stopPropagation());
 
   document.querySelectorAll('[data-nav-toggle]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1405,6 +1468,19 @@ async function fetchCRMSalesOrderByControlNo(controlNo) {
   if (snap.empty) return null;
   const d = snap.docs[0];
   return { id: d.id, ...d.data() };
+}
+function salesOrderTimestampMs(so) {
+  if (so.createdAt && so.createdAt.toDate) return so.createdAt.toDate().getTime();
+  if (so.createdAt) { const t = new Date(so.createdAt).getTime(); if (!isNaN(t)) return t; }
+  if (so.poDate) { const t = new Date(so.poDate).getTime(); if (!isNaN(t)) return t; }
+  return 0;
+}
+async function fetchRecentCRMSalesOrders(limitCount) {
+  if (!crmReady) return [];
+  const snap = await getDocs(collection(crmDb, 'salesorders'));
+  const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  docs.sort((a, b) => salesOrderTimestampMs(b) - salesOrderTimestampMs(a));
+  return docs.slice(0, limitCount);
 }
 async function fetchAllCRMSuppliers() {
   if (!crmReady) throw new Error('CRM connection not configured.');
