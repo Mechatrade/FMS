@@ -4772,9 +4772,17 @@ function maskAccountNumber(num) {
   const clean = String(num).replace(/\s+/g, '');
   return clean.length > 4 ? '••••' + clean.slice(-4) : clean;
 }
-async function fetchActiveBankAccounts() {
+async function fetchActiveBankAccounts(includeAllTypes) {
   const all = await fetchFinanceCollection('bankAccounts');
-  return all.filter(b => b.status !== 'Inactive');
+  const active = all.filter(b => b.status !== 'Inactive');
+  // Custodian sees/chooses Cash-type funds only, everywhere — never a
+  // Checking/Savings account — unless a caller explicitly opts out
+  // (Petty Cash Replenishment genuinely needs the full list, since it
+  // draws from a real bank account by design).
+  if (!includeAllTypes && currentProfile && currentProfile.role === 'custodian') {
+    return active.filter(b => b.accountType === 'Cash');
+  }
+  return active;
 }
 function bankAccountSelectHtml(bankAccounts, selectedId, opts = {}) {
   return `
@@ -5906,7 +5914,7 @@ async function renderDisbursementVoucherDetailPage(id) {
   if (v.status === 'Pending' && (canApproveDisbursements() || isRequester)) {
     buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Cancel</button>`);
   }
-  if (v.status === 'Rejected' || v.status === 'Cancelled') {
+  if ((v.status === 'Rejected' || v.status === 'Cancelled') && (v.type !== 'Petty Cash Replenishment' || canApproveDisbursements())) {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
   }
   buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
@@ -5967,7 +5975,7 @@ async function renderEditDisbursementVoucherPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let v, bankAccounts = [], maxAmount = null;
   try {
-    [v, bankAccounts] = await Promise.all([fetchFinanceDoc('disbursementVouchers', id), fetchActiveBankAccounts()]);
+    v = await fetchFinanceDoc('disbursementVouchers', id);
   } catch (e) {
     console.error(e);
     contentWrap(poLoadErrorHtml());
@@ -5977,8 +5985,25 @@ async function renderEditDisbursementVoucherPage(id) {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Voucher not found.</p><a href="#/disbursement/vouchers" class="mt-4 text-sm text-forest hover:underline">Back to Disbursement Vouchers</a></div>`);
     return;
   }
+  try {
+    // Petty Cash Replenishment always draws from a real bank account (that's
+    // the whole point — refilling the cash box), so it needs the full list
+    // even for a Custodian, who is otherwise restricted to Cash-type
+    // accounts everywhere else.
+    bankAccounts = await fetchActiveBankAccounts(v.type === 'Petty Cash Replenishment');
+  } catch (e) { console.error(e); }
   if (v.status !== 'Rejected' && v.status !== 'Cancelled') {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Only a Rejected or Cancelled voucher can be edited.</p><a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a></div>`);
+    return;
+  }
+  if (v.type === 'Petty Cash Replenishment' && !canApproveDisbursements()) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
+      <h2 class="text-base font-medium text-charcoal">Replenishment requests are limited to Finance Manager and System Admin</h2>
+      <p class="text-sm text-muted mt-1.5 max-w-sm">Ask a Manager/Admin to resubmit this one.</p>
+      <a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a>
+    </div>`);
+    refreshIcons();
     return;
   }
 
@@ -6242,7 +6267,7 @@ async function renderPettyCashPage() {
                 <td class="px-4 py-3 text-right space-x-3">
                   <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="btn-glass-sm">New Voucher</a>
                   <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="btn-glass-sm">Vouchers</a>
-                  ${r.availableCount ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
+                  ${r.availableCount && canApproveDisbursements() ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
                 </td>
               </tr>`).join('')}
           </tbody>
@@ -6416,10 +6441,20 @@ async function renderPettyCashVouchersListPage(fundId) {
   }
 }
 async function renderNewReplenishmentPage(fundId) {
+  if (!canApproveDisbursements()) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
+      <h2 class="text-base font-medium text-charcoal">Replenishment requests are limited to Finance Manager and System Admin</h2>
+      <p class="text-sm text-muted mt-1.5 max-w-sm">If this fund needs replenishing, ask a Manager/Admin to submit the request.</p>
+      <a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a>
+    </div>`);
+    refreshIcons();
+    return;
+  }
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let fund, unreplenished = [], realBankAccounts = [];
   try {
-    const [fundData, all, banks] = await Promise.all([fetchFinanceDoc('bankAccounts', fundId), fetchFinanceCollection('pettyCashVouchers'), fetchActiveBankAccounts()]);
+    const [fundData, all, banks] = await Promise.all([fetchFinanceDoc('bankAccounts', fundId), fetchFinanceCollection('pettyCashVouchers'), fetchActiveBankAccounts(true)]);
     fund = fundData;
     unreplenished = all.filter(p => p.fundId === fundId && p.status === 'Paid' && !p.replenished && !p.replenishmentRequestId);
     realBankAccounts = banks.filter(b => b.accountType !== 'Cash');
