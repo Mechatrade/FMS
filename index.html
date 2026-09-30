@@ -718,9 +718,9 @@ async function refreshApprovalsBadge() {
   }
   refreshNotificationBell();
 }
-let notificationCache = { pendingDVs: [], recentSalesOrders: [] };
+let notificationCache = { pendingDVs: [], recentSalesOrders: [], overdueAdvances: [] };
 function notificationPanelBodyHtml() {
-  const { pendingDVs, recentSalesOrders } = notificationCache;
+  const { pendingDVs, recentSalesOrders, overdueAdvances } = notificationCache;
   const approvalsSection = canApproveDisbursements() ? `
     <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Approvals</p></div>
     ${pendingDVs.length ? pendingDVs.slice(0, 6).map(v => `
@@ -728,6 +728,13 @@ function notificationPanelBodyHtml() {
         <p class="text-sm text-charcoal">${v.number} — ${escapeAttr(v.payee || v.type)}</p>
         <p class="text-xs text-muted">${formatCurrency(v.amount)} · awaiting your approval</p>
       </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">Nothing pending approval.</p>`}` : '';
+  const overdueSection = canApproveDisbursements() ? `
+    <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Overdue Cash Advances</p></div>
+    ${overdueAdvances.length ? overdueAdvances.map(ca => `
+      <a href="#/disbursement/cash-advances/view/${ca.id}" class="block px-3 py-2 hover:bg-cream border-b border-borderc">
+        <p class="text-sm text-charcoal">${ca.number} — ${escapeAttr(ca.employeeName)}</p>
+        <p class="text-xs text-red-600">${formatCurrency(ca.amount)} · ${Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000)}d unliquidated</p>
+      </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">None overdue.</p>`}` : '';
   const crmSection = crmReady ? `
     <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">New Sales Orders (CRM)</p></div>
     ${recentSalesOrders.length ? recentSalesOrders.map(so => `
@@ -735,18 +742,23 @@ function notificationPanelBodyHtml() {
         <p class="text-sm text-charcoal">${escapeAttr(so.controlNo || so.orderNo || 'Sales Order')} — ${escapeAttr((so.billedTo && so.billedTo.name) || 'Unknown Client')}</p>
         <p class="text-xs text-muted">${so.total != null ? formatCurrency(so.total) + ' · ' : ''}Pull into a Client PO</p>
       </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted">No recent sales orders.</p>`}` : '';
-  if (!approvalsSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
-  return approvalsSection + crmSection;
+  if (!approvalsSection && !overdueSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
+  return approvalsSection + overdueSection + crmSection;
 }
 async function refreshNotificationBell() {
   const badgeEl = document.getElementById('notif-badge');
   const bodyEl = document.getElementById('notif-panel-body');
   if (!badgeEl) return;
   let pendingDVs = [];
+  let overdueAdvances = [];
   if (canApproveDisbursements()) {
     try {
       const vouchers = await fetchFinanceCollection('disbursementVouchers');
       pendingDVs = vouchers.filter(v => v.status === 'Pending');
+    } catch (e) { console.error(e); }
+    try {
+      const advances = await fetchFinanceCollection('cashAdvances');
+      overdueAdvances = advances.filter(isCAOverdue);
     } catch (e) { console.error(e); }
   }
   let recentSalesOrders = [];
@@ -755,10 +767,10 @@ async function refreshNotificationBell() {
       recentSalesOrders = await fetchRecentCRMSalesOrders(5);
     } catch (e) { console.error(e); }
   }
-  notificationCache = { pendingDVs, recentSalesOrders };
+  notificationCache = { pendingDVs, recentSalesOrders, overdueAdvances };
   const recentCutoffMs = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const newSalesOrderCount = recentSalesOrders.filter(so => salesOrderTimestampMs(so) >= recentCutoffMs).length;
-  const total = pendingDVs.length + newSalesOrderCount;
+  const total = pendingDVs.length + overdueAdvances.length + newSalesOrderCount;
   badgeEl.innerHTML = total > 0 ? `<span class="nav-badge" style="position:absolute;top:2px;right:2px;">${total}</span>` : '';
   if (bodyEl) { bodyEl.innerHTML = notificationPanelBodyHtml(); refreshIcons(); }
 }
@@ -1393,6 +1405,7 @@ function statusBadgeClass(status) {
     'Inactive': 'bg-gray-100 text-gray-600 border-gray-300',
     'Paid': 'bg-teal-50 text-teal-700 border-teal-200',
     'Pending Approval': 'bg-amber-50 text-amber-700 border-amber-200',
+    'Pending Liquidation Review': 'bg-blue-50 text-blue-700 border-blue-200',
     'Outstanding': 'bg-orange-50 text-orange-700 border-orange-200',
     'Liquidated': 'bg-teal-50 text-teal-700 border-teal-200',
     'Processed': 'bg-teal-50 text-teal-700 border-teal-200',
@@ -5396,6 +5409,7 @@ const DV_TYPES = ['Regular Payment', 'Petty Cash Replenishment', 'Cash Advance R
 // identically to Cancelled everywhere.
 const DV_STATUSES = ['Pending', 'Approved', 'Paid', 'Cancelled'];
 const CA_AGING_DAYS = 30;
+const CA_TYPES = ['Personal/Operational', 'Equipment Purchase', 'Materials Purchase', 'Other'];
 
 let approvalRulesCache = { financeManagerLimit: null };
 async function loadApprovalRules() {
@@ -5563,6 +5577,32 @@ async function executeCashAdvanceReleaseDV(dv) {
     { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId, bankAccountId },
   ]);
   await updateFinanceDoc('cashAdvances', cashAdvanceId, { status: 'Outstanding', dateReleased: datePaid, bankAccountId, bankAccountName });
+}
+// Posts the actual GL entries for a Cash Advance liquidation. Only called
+// once a liquidation has been Approved — submitting it just stores the
+// draft (liquidationPending) and waits for review.
+async function executeCashAdvanceLiquidation(ca, id, pending) {
+  const { dateLiquidated, items, totalLiquidated, excess, shortfall, returnAccountId, returnAccountName } = pending;
+  const glLines = items.map(i => ({
+    date: dateLiquidated, account: i.category, debit: i.amount, credit: 0,
+    description: `Cash advance liquidation — ${ca.number} (${i.description || i.category})`, sourceType: 'cash-advance-liquidation', sourceId: id,
+  }));
+  glLines.push({ date: dateLiquidated, account: 'Advances to Employees', debit: 0, credit: ca.amount, description: `Cash advance liquidation — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id });
+
+  let shortfallAPId = null;
+  if (excess > 0) {
+    glLines.push({ date: dateLiquidated, account: returnAccountName, debit: excess, credit: 0, description: `Cash advance excess returned — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id, bankAccountId: returnAccountId });
+  } else if (shortfall > 0) {
+    const apRef = await createFinanceDoc('accountsPayable', {
+      source: 'cash-advance-shortfall', payee: ca.employeeName, category: 'Advances to Employees',
+      amount: shortfall, amountPaid: 0, balance: shortfall, status: 'Unpaid', payments: [],
+      dateReceived: dateLiquidated, dueDate: '', description: `Cash advance shortfall reimbursement — ${ca.number}`,
+    });
+    shortfallAPId = apRef.id;
+    glLines.push({ date: dateLiquidated, account: 'Accounts Payable', debit: 0, credit: shortfall, description: `Cash advance shortfall — ${ca.number}`, sourceType: 'ap-payment', sourceId: apRef.id });
+  }
+  await postGLEntries(glLines);
+  return shortfallAPId;
 }
 async function executeDisbursementVoucher(dv) {
   if (dv.type === 'Regular Payment') return executeRegularPaymentDV(dv);
@@ -6503,38 +6543,55 @@ async function renderNewReplenishmentPage(fundId) {
 }
 
 /* ---- Cash Advances ---- */
+function isCAOverdue(ca) {
+  if (ca.status !== 'Outstanding' || !ca.dateReleased) return false;
+  return Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000) > CA_AGING_DAYS;
+}
 function caAgingBadge(ca) {
-  if (ca.status !== 'Outstanding' || !ca.dateReleased) return '';
+  if (!isCAOverdue(ca)) return '';
   const days = Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000);
-  if (days > CA_AGING_DAYS) {
-    return `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-red-50 text-red-600 border-red-200">${days}d overdue</span>`;
-  }
-  return '';
+  return `<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-red-50 text-red-600 border-red-200">${days}d overdue</span>`;
 }
 async function renderCashAdvancesPage() {
   contentWrap(`
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-xl font-semibold text-charcoal">Cash Advances</h1>
-        <p class="text-sm text-muted mt-1">Employee cash advances. Outstanding advances past ${CA_AGING_DAYS} days unliquidated are flagged.</p>
+        <p class="text-sm text-muted mt-1">Advances for operational, equipment, or materials use. Outstanding advances past ${CA_AGING_DAYS} days unliquidated are flagged.</p>
       </div>
       <a href="#/disbursement/cash-advances/new" class="btn-primary text-sm">+ New Cash Advance</a>
     </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <select id="ca-type-filter" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Types</option>
+        ${CA_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+      </select>
+    </div>
     <div id="ca-list-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
+  let advances = [];
   try {
-    const advances = await fetchFinanceCollection('cashAdvances');
-    document.getElementById('ca-list-container').innerHTML = advances.length ? `
+    advances = await fetchFinanceCollection('cashAdvances');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('ca-list-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+  const renderFiltered = () => {
+    const typeFilter = document.getElementById('ca-type-filter').value;
+    const filtered = typeFilter ? advances.filter(a => a.type === typeFilter) : advances;
+    document.getElementById('ca-list-container').innerHTML = filtered.length ? `
       <div class="card overflow-x-auto">
         <table class="w-full text-sm">
           <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">CA #</th><th class="px-4 py-3">Employee</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Released</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+            <th class="px-4 py-3">CA #</th><th class="px-4 py-3">Requested By</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Date Released</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
           </tr></thead>
           <tbody>
-            ${advances.map(a => `
+            ${filtered.map(a => `
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
                 <td class="px-4 py-3 font-medium text-charcoal">${a.number}</td>
                 <td class="px-4 py-3">${a.employeeName || '—'}</td>
+                <td class="px-4 py-3">${a.type || '—'}</td>
                 <td class="px-4 py-3">${a.purpose || '—'}</td>
                 <td class="px-4 py-3">${formatCurrency(a.amount)}</td>
                 <td class="px-4 py-3">${formatDate(a.dateReleased)}</td>
@@ -6546,17 +6603,17 @@ async function renderCashAdvancesPage() {
               </tr>`).join('')}
           </tbody>
         </table>
-      </div>` : `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No cash advances recorded yet.</div>`;
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No cash advances match this filter.</div>`;
     refreshIcons();
-  } catch (e) {
-    console.error(e);
-    document.getElementById('ca-list-container').innerHTML = poLoadErrorHtml();
-  }
+  };
+  renderFiltered();
+  document.getElementById('ca-type-filter').addEventListener('change', renderFiltered);
 }
 async function renderNewCashAdvancePage() {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let bankAccounts = [];
+  let bankAccounts = [], existingAdvances = [];
   try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+  try { existingAdvances = await fetchFinanceCollection('cashAdvances'); } catch (e) { console.error(e); }
 
   contentWrap(`
     <div class="mb-6">
@@ -6566,7 +6623,11 @@ async function renderNewCashAdvancePage() {
     <form id="ca-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="ca-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${textField('caEmployeeName', 'Employee Name', { required: true })}
+        <div class="sm:col-span-2">
+          ${textField('caEmployeeName', 'Requested By', { required: true })}
+          <div id="ca-employee-warning" class="hidden mt-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5"></div>
+        </div>
+        ${selectField('caType', 'Type', CA_TYPES, { required: true, value: 'Personal/Operational' })}
         ${numberField('caAmount', 'Amount (₱)', { required: true, step: '0.01' })}
         ${dateField('caDate', 'Date Requested', { required: true, value: todayISO() })}
         ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
@@ -6582,10 +6643,27 @@ async function renderNewCashAdvancePage() {
   refreshIcons();
   wireModeOfPaymentToggle();
 
+  document.getElementById('field-caEmployeeName').addEventListener('blur', () => {
+    const name = document.getElementById('field-caEmployeeName').value.trim().toLowerCase();
+    const warnBox = document.getElementById('ca-employee-warning');
+    if (!name) { warnBox.classList.add('hidden'); return; }
+    const existing = existingAdvances.find(a =>
+      (a.employeeName || '').trim().toLowerCase() === name &&
+      (a.status === 'Outstanding' || a.status === 'Pending Liquidation Review'));
+    if (existing) {
+      const daysOut = existing.dateReleased ? Math.round((new Date(todayISO()) - new Date(existing.dateReleased)) / 86400000) : null;
+      warnBox.textContent = `${existing.employeeName} already has an unliquidated advance: ${existing.number} — ${formatCurrency(existing.amount)}${daysOut != null ? `, released ${daysOut} day(s) ago` : ''} (${dvStatusLabel(existing.status)}).`;
+      warnBox.classList.remove('hidden');
+    } else {
+      warnBox.classList.add('hidden');
+    }
+  });
+
   document.getElementById('ca-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('ca-form-error');
     errBox.classList.add('hidden');
     const employeeName = document.getElementById('field-caEmployeeName').value.trim();
+    const type = document.getElementById('field-caType').value;
     const amount = Number(document.getElementById('field-caAmount').value) || 0;
     const date = document.getElementById('field-caDate').value;
     const purpose = document.getElementById('field-caPurpose').value.trim();
@@ -6595,7 +6673,7 @@ async function renderNewCashAdvancePage() {
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
     const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
 
-    if (!employeeName || !amount || !date || !purpose || !bankAccountId || !modeOfPayment) {
+    if (!employeeName || !type || !amount || !date || !purpose || !bankAccountId || !modeOfPayment) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
@@ -6608,7 +6686,7 @@ async function renderNewCashAdvancePage() {
 
     const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
     const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = { caNumber, dvNumber, employeeName, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment, chequeNo };
+    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment, chequeNo };
 
     document.getElementById('ca-form').classList.add('hidden');
     const wrap = document.getElementById('ca-preview-wrap');
@@ -6618,7 +6696,8 @@ async function renderNewCashAdvancePage() {
         ${voucherStampHtml('Pending')}
         ${voucherLetterheadHtml('Cash Advance Request', 'CA No.', `${draft.caNumber} · DV ${draft.dvNumber}`, dvStatusLabel('Pending'), 'Date', formatDate(draft.date))}
         <div class="grid grid-cols-2 gap-4 text-sm mt-6">
-          <div><p class="text-xs text-muted uppercase">Employee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
+          <div><p class="text-xs text-muted uppercase">Type</p><p class="font-medium text-charcoal mt-0.5">${draft.type}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
           <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
@@ -6646,7 +6725,7 @@ async function renderNewCashAdvancePage() {
       btn.disabled = true; btn.innerHTML = spinnerHtml();
       try {
         const caRef = await createFinanceDoc('cashAdvances', {
-          number: draft.caNumber, employeeName: draft.employeeName, purpose: draft.purpose,
+          number: draft.caNumber, employeeName: draft.employeeName, type: draft.type, purpose: draft.purpose,
           amount: draft.amount, dateRequested: draft.date, status: 'Pending Approval',
         });
         await createFinanceDoc('disbursementVouchers', {
@@ -6674,6 +6753,7 @@ async function renderCashAdvanceDetailPage(id) {
   if (!ca) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Cash advance not found.</p><a href="#/disbursement/cash-advances" class="mt-4 text-sm text-forest hover:underline">Back to Cash Advances</a></div>`); return; }
 
   const liq = ca.liquidation;
+  const pending = ca.liquidationPending;
   contentWrap(`
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
@@ -6686,7 +6766,18 @@ async function renderCashAdvanceDetailPage(id) {
       <div class="grid grid-cols-2 gap-4 text-sm">
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(ca.amount)}</p></div>
         <div><p class="text-xs text-muted uppercase">Date Released</p><p class="font-medium text-charcoal mt-0.5">${formatDate(ca.dateReleased)}</p></div>
+        <div><p class="text-xs text-muted uppercase">Type</p><p class="font-medium text-charcoal mt-0.5">${ca.type || '—'}</p></div>
       </div>
+      ${ca.status === 'Pending Liquidation Review' && pending ? `
+        <div class="border-t border-borderc pt-4">
+          <p class="text-xs text-muted uppercase mb-2">Liquidation Submitted (${formatDate(pending.dateLiquidated)}) — Awaiting Review</p>
+          ${pending.items.map(i => `<div class="flex justify-between text-sm py-1"><span>${escapeAttr(i.category)}${i.description ? ' — ' + escapeAttr(i.description) : ''}</span><span>${formatCurrency(i.amount)}</span></div>`).join('')}
+          <div class="flex justify-between text-sm py-1 mt-2 border-t border-borderc font-semibold"><span>Total Itemized</span><span>${formatCurrency(pending.totalLiquidated)}</span></div>
+          ${pending.excess > 0 ? `<p class="text-xs text-forest mt-1">₱${pending.excess.toFixed(2)} to be returned by employee, to ${escapeAttr(pending.returnAccountName)}.</p>` : ''}
+          ${pending.shortfall > 0 ? `<p class="text-xs text-orange-600 mt-1">₱${pending.shortfall.toFixed(2)} will be owed to the employee once approved.</p>` : ''}
+          ${pending.receiptsLink ? `<p class="text-xs mt-2"><a href="${escapeAttr(pending.receiptsLink)}" target="_blank" rel="noopener" class="text-forest hover:underline">View Receipts / Supporting Documents</a></p>` : ''}
+          <p class="text-xs text-muted mt-2">Submitted by ${escapeAttr(pending.submittedBy) || '—'}</p>
+        </div>` : ''}
       ${liq ? `
         <div class="border-t border-borderc pt-4">
           <p class="text-xs text-muted uppercase mb-2">Liquidation (${formatDate(liq.dateLiquidated)})</p>
@@ -6694,13 +6785,59 @@ async function renderCashAdvanceDetailPage(id) {
           <div class="flex justify-between text-sm py-1 mt-2 border-t border-borderc font-semibold"><span>Total Liquidated</span><span>${formatCurrency(liq.totalLiquidated)}</span></div>
           ${liq.excess > 0 ? `<p class="text-xs text-forest mt-1">₱${liq.excess.toFixed(2)} returned by employee.</p>` : ''}
           ${liq.shortfall > 0 ? `<p class="text-xs text-orange-600 mt-1">₱${liq.shortfall.toFixed(2)} owed to employee (reimbursement created in Accounts Payable).</p>` : ''}
+          ${liq.receiptsLink ? `<p class="text-xs mt-2"><a href="${escapeAttr(liq.receiptsLink)}" target="_blank" rel="noopener" class="text-forest hover:underline">View Receipts / Supporting Documents</a></p>` : ''}
+          ${liq.approvedBy ? `<p class="text-xs text-muted mt-1">Approved by ${escapeAttr(liq.approvedBy)}</p>` : ''}
         </div>` : ''}
+      ${ca.liquidationRejectionReason ? `<div class="border-t border-borderc pt-4"><p class="text-xs text-muted uppercase mb-1">Last Liquidation Sent Back</p><p class="text-sm text-charcoal">${escapeAttr(ca.liquidationRejectionReason)}</p></div>` : ''}
     </div>
-    <div class="max-w-2xl mt-4 flex gap-3">
+    <div id="ca-detail-error" class="max-w-2xl mt-3 hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+    <div class="max-w-2xl mt-4 flex flex-wrap gap-3" id="ca-detail-actions">
       ${ca.status === 'Outstanding' ? `<a href="#/disbursement/cash-advances/liquidate/${ca.id}" class="btn-primary text-sm">Liquidate</a>` : ''}
+      ${ca.status === 'Pending Liquidation Review' && canApproveDisbursements() ? `
+        <button type="button" id="ca-liq-approve-btn" class="btn-glass-sm text-sm">Approve Liquidation</button>
+        <button type="button" id="ca-liq-reject-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Send Back</button>` : ''}
       <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Back to list</a>
-    </div>`);
+    </div>
+    <div class="max-w-2xl mt-3" id="ca-detail-prompt"></div>`);
   refreshIcons();
+
+  const errBox = document.getElementById('ca-detail-error');
+  const promptBox = document.getElementById('ca-detail-prompt');
+
+  document.getElementById('ca-liq-approve-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('ca-liq-approve-btn');
+    btn.disabled = true;
+    try {
+      const shortfallAPId = await executeCashAdvanceLiquidation(ca, id, pending);
+      await updateFinanceDoc('cashAdvances', id, {
+        status: 'Liquidated',
+        liquidation: { ...pending, approvedBy: currentUser.email, dateApproved: todayISO(), shortfallAPId },
+        liquidationPending: null, liquidationRejectionReason: null,
+      });
+      renderCashAdvanceDetailPage(id);
+    } catch (e) {
+      console.error(e);
+      errBox.textContent = 'Could not approve this liquidation. Please try again.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  });
+  document.getElementById('ca-liq-reject-btn')?.addEventListener('click', () => {
+    showVoucherNotePrompt(promptBox, {
+      title: 'Reason for Sending Back',
+      confirmLabel: 'Confirm Send Back',
+      onConfirm: async (notes) => {
+        try {
+          await updateFinanceDoc('cashAdvances', id, { status: 'Outstanding', liquidationPending: null, liquidationRejectionReason: notes });
+          renderCashAdvanceDetailPage(id);
+        } catch (e) {
+          console.error(e);
+          errBox.textContent = 'Could not send this back. Please try again.';
+          errBox.classList.remove('hidden');
+        }
+      },
+    });
+  });
 }
 async function renderCashAdvanceLiquidationPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
@@ -6736,8 +6873,10 @@ async function renderCashAdvanceLiquidationPage(id) {
         ${bankAccountSelectHtml(bankAccounts, null, {})}
         <p class="text-xs text-muted mt-1.5">Account that receives any cash the employee returns (only used if itemized total is less than the advance).</p>
       </div>
+      ${textField('receiptsLink', 'Receipts / Supporting Documents (link)', {})}
+      <p class="text-xs text-muted">A Google Drive (or similar) link to the scanned receipts for these expenses. This submission goes to a Manager/Admin for review before it posts to the books.</p>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="liq-submit" type="submit" class="btn-primary"><span id="liq-submit-text">Save Liquidation</span></button>
+        <button id="liq-submit" type="submit" class="btn-primary"><span id="liq-submit-text">Submit for Review</span></button>
         <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Cancel</a>
       </div>
     </form>`);
@@ -6816,36 +6955,22 @@ async function renderCashAdvanceLiquidationPage(id) {
 
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
-      const glLines = items.map(i => ({
-        date: liqDate, account: i.category, debit: i.amount, credit: 0,
-        description: `Cash advance liquidation — ${ca.number} (${i.description || i.category})`, sourceType: 'cash-advance-liquidation', sourceId: id,
-      }));
-      glLines.push({ date: liqDate, account: 'Advances to Employees', debit: 0, credit: ca.amount, description: `Cash advance liquidation — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id });
-
-      let shortfallAPId = null;
-      if (excess > 0) {
-        glLines.push({ date: liqDate, account: returnAccountName, debit: excess, credit: 0, description: `Cash advance excess returned — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id, bankAccountId: returnAccountId });
-      } else if (shortfall > 0) {
-        const apRef = await createFinanceDoc('accountsPayable', {
-          source: 'cash-advance-shortfall', payee: ca.employeeName, category: 'Advances to Employees',
-          amount: shortfall, amountPaid: 0, balance: shortfall, status: 'Unpaid', payments: [],
-          dateReceived: liqDate, dueDate: '', description: `Cash advance shortfall reimbursement — ${ca.number}`,
-        });
-        shortfallAPId = apRef.id;
-        glLines.push({ date: liqDate, account: 'Accounts Payable', debit: 0, credit: shortfall, description: `Cash advance shortfall — ${ca.number}`, sourceType: 'ap-payment', sourceId: apRef.id });
-      }
-      await postGLEntries(glLines);
-
+      const receiptsLink = document.getElementById('field-receiptsLink').value.trim();
       await updateFinanceDoc('cashAdvances', id, {
-        status: 'Liquidated',
-        liquidation: { dateLiquidated: liqDate, items, totalLiquidated, excess, shortfall, returnedToAccountId: returnAccountId || null, returnedToAccountName: returnAccountName || null, shortfallAPId },
+        status: 'Pending Liquidation Review',
+        liquidationPending: {
+          dateLiquidated: liqDate, items, totalLiquidated, excess, shortfall,
+          returnAccountId: returnAccountId || null, returnAccountName: returnAccountName || null,
+          receiptsLink: receiptsLink || null, submittedBy: currentUser ? currentUser.email : null,
+        },
       });
+      refreshApprovalsBadge();
       navigateTo('disbursement/cash-advances');
     } catch (err) {
       console.error(err);
-      errBox.textContent = 'Could not save this liquidation. Please try again.';
+      errBox.textContent = 'Could not submit this liquidation. Please try again.';
       errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Save Liquidation';
+      btn.disabled = false; btnText.textContent = 'Submit for Review';
     }
   });
 }
