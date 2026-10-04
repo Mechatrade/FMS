@@ -322,7 +322,7 @@ const STANDBY_MODULES = {
 const ROLE_PERMISSIONS = {
   system_admin: {},
   finance_manager: { procurement: false, installation: false, administration: false, settings: false },
-  custodian: { 'client-orders': false, finance: false, billing: false, procurement: false, installation: false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
+  custodian: { dashboard: false, 'client-orders': false, finance: false, billing: false, procurement: false, installation: false, 'cash-management': false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
   procurement_staff: { 'client-orders': false, finance: false, billing: false, installation: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
   operations: { finance: false, billing: false, procurement: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, administration: false, settings: false },
   // Legacy
@@ -361,6 +361,15 @@ function canAccess(topPath) {
   if (!currentProfile) return true;
   const perms = ROLE_PERMISSIONS[currentProfile.role] || {};
   return perms[topPath] !== false;
+}
+// First page this role can open — where it lands after signing in, and where it is sent
+// if it asks for a page (such as the Dashboard) that its role doesn't include.
+function landingPath() {
+  for (const item of NAV) {
+    if (!canAccess(item.path)) continue;
+    return item.children && item.children.length ? item.children[0].path : item.path;
+  }
+  return 'dashboard';
 }
 
 /* ==========================================================================
@@ -865,6 +874,12 @@ function buildBreadcrumb(topItem, childItem) {
 function renderRoute() {
   if (!currentUser) return; // guarded elsewhere
   const path = currentPathFromHash();
+
+  // A role without Dashboard access starts on its own first page instead.
+  if (path === 'dashboard' && !canAccess('dashboard')) {
+    const target = landingPath();
+    if (target !== 'dashboard') { window.location.hash = '#/' + target; return; }
+  }
 
   // Standby / future module check (not in NAV, reached only via config)
   const standbyKey = Object.keys(STANDBY_MODULES).find(k => path === `future/${k}`);
@@ -2479,7 +2494,9 @@ function wireModeBankFilter(accounts) {
     if (list.length) {
       text = mode === 'Cash' ? 'Showing Cash funds only.' : 'Showing bank accounts only.';
     } else if (mode === 'Cash') {
-      text = 'No Cash fund available. Add a Cash-type account under Cash Management → Bank Accounts.';
+      text = canAccess('cash-management')
+        ? 'No Cash fund available. Add a Cash-type account under Cash Management → Bank Accounts.'
+        : 'No Cash fund available. Ask a System Admin or Finance Manager to add one.';
       tone = 'text-amber-700';
     } else if (currentProfile && currentProfile.role === 'custodian') {
       text = 'Cheque, Debit Memo and Other payments use bank accounts, which aren\'t available to your role.';
@@ -5669,8 +5686,8 @@ async function renderNewFundTransferPage() {
   if (accounts.length < 2) {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
       <p class="text-sm text-charcoal font-medium">A transfer needs at least two accounts you can use.</p>
-      <p class="text-sm text-muted mt-1">Add another bank account or cash fund first.</p>
-      <a href="#/cash-management/bank-accounts" class="mt-4 text-sm text-forest hover:underline">Go to Bank Accounts</a>
+      <p class="text-sm text-muted mt-1">${canAccess('cash-management') ? 'Add another bank account or cash fund first.' : 'Ask a System Admin or Finance Manager to add another cash fund.'}</p>
+      ${canAccess('cash-management') ? '<a href="#/cash-management/bank-accounts" class="mt-4 text-sm text-forest hover:underline">Go to Bank Accounts</a>' : ''}
     </div>`);
     return;
   }
@@ -7104,7 +7121,7 @@ async function ensureUserProfile(user) {
 
 function initRouter() {
   window.addEventListener('hashchange', renderRoute);
-  if (!window.location.hash) window.location.hash = '#/dashboard';
+  if (!window.location.hash) window.location.hash = '#/' + landingPath();
   renderRoute();
 }
 
