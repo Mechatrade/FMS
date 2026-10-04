@@ -5885,6 +5885,10 @@ function showChequeCorrectionPrompt(container, opts) {
     try { await opts.onConfirm(newNo, reason); } finally { btn.disabled = false; }
   });
 }
+// The requester is the account that submitted the request (not whoever is named in "Requested By").
+function isVoucherRequester(v) {
+  return !!(currentUser && v.requestedBy && String(v.requestedBy).toLowerCase() === String(currentUser.email || '').toLowerCase());
+}
 // Shown to the approver of a Cash Advance, where funding is decided at approval:
 // how it is paid, and from which account.
 function showFundingPrompt(container, opts) {
@@ -6027,7 +6031,7 @@ async function renderDisbursementVoucherDetailPage(id) {
   const errBox = document.getElementById('dv-detail-error');
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
-  const isRequester = !!(currentUser && v.requestedBy === currentUser.email);
+  const isRequester = isVoucherRequester(v);
   const retired = isRetiredDVType(v.type);
   const overLimitForRole = !retired && v.status === 'Pending' && canApproveDisbursements() && !canApproveDisbursements(v.amount);
   if (!retired && v.status === 'Pending' && canApproveDisbursements(v.amount)) {
@@ -6041,7 +6045,7 @@ async function renderDisbursementVoucherDetailPage(id) {
   if (!retired && v.status === 'Approved' && canApproveDisbursements(v.amount)) {
     buttons.push(`<button type="button" id="dv-markpaid-btn" class="btn-glass-sm text-sm">Mark as Paid</button>`);
   }
-  if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled')) {
+  if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled') && isRequester) {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
   }
   if (!retired && v.modeOfPayment === 'Cheque' && (v.status === 'Approved' || v.status === 'Paid') && canApproveDisbursements(v.amount)) {
@@ -6055,6 +6059,8 @@ async function renderDisbursementVoucherDetailPage(id) {
     promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">Petty Cash is no longer used in this system. This voucher is kept for the record and can only be cancelled.</p>`;
   } else if (!retired && v.status === 'Approved' && canApproveDisbursements(v.amount)) {
     promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">This voucher was approved while payments still waited for an encashment batch. Mark it as paid to post it.</p>`;
+  } else if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled') && !isRequester) {
+    promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">Only the person who made this request (${escapeAttr(v.requestedBy) || 'unknown'}) can edit and resubmit it.</p>`;
   }
   refreshIcons();
 
@@ -6185,6 +6191,16 @@ async function renderEditDisbursementVoucherPage(id) {
       <p class="text-sm text-charcoal font-medium">This voucher type is no longer used, so it can't be resubmitted.</p>
       <a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a>
     </div>`);
+    return;
+  }
+  if (!isVoucherRequester(v)) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
+      <h2 class="text-base font-medium text-charcoal">Only the requester can edit and resubmit this</h2>
+      <p class="text-sm text-muted mt-1.5 max-w-sm">This request was made by ${escapeAttr(v.requestedBy) || 'another account'}. Ask them to edit it and resubmit.</p>
+      <a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a>
+    </div>`);
+    refreshIcons();
     return;
   }
 
