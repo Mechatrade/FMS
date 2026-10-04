@@ -2452,13 +2452,57 @@ function modeOfPaymentFieldHtml(selectedMode, chequeNo) {
       <input id="field-chequeNo" type="text" value="${escapeAttr(chequeNo)}" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
     </div>`;
 }
-function wireModeOfPaymentToggle() {
+// Mode of Payment decides which accounts can be used:
+//   Cash                          -> Cash-type funds only
+//   Cheque / Debit Memo / Others  -> bank accounts only (anything that isn't a Cash fund)
+function accountsForMode(accounts, mode) {
+  return mode === 'Cash'
+    ? accounts.filter(b => b.accountType === 'Cash')
+    : accounts.filter(b => b.accountType !== 'Cash');
+}
+// Keeps the Bank Account dropdown in step with the Mode of Payment field: only matching
+// accounts are listed, and a selection that no longer fits is cleared.
+function wireModeBankFilter(accounts) {
+  const modeSel = document.getElementById('field-modeOfPayment');
+  const bankSel = document.getElementById('field-bankAccountId');
+  if (!modeSel || !bankSel) return;
+  const render = (keepId) => {
+    const mode = modeSel.value;
+    const list = accountsForMode(accounts, mode);
+    bankSel.innerHTML = '<option value="">Select...</option>' + list.map(b =>
+      `<option value="${b.id}" ${b.id === keepId ? 'selected' : ''}>${escapeAttr(b.nickname)}${b.bankName ? ' — ' + escapeAttr(b.bankName) : ''}</option>`).join('');
+    let hint = bankSel.parentElement.querySelector('.bank-mode-hint');
+    if (!hint) {
+      hint = document.createElement('p');
+      bankSel.parentElement.appendChild(hint);
+    }
+    let text, tone = 'text-muted';
+    if (list.length) {
+      text = mode === 'Cash' ? 'Showing Cash funds only.' : 'Showing bank accounts only.';
+    } else if (mode === 'Cash') {
+      text = 'No Cash fund available. Add a Cash-type account under Cash Management → Bank Accounts.';
+      tone = 'text-amber-700';
+    } else if (currentProfile && currentProfile.role === 'custodian') {
+      text = 'Cheque, Debit Memo and Other payments use bank accounts, which aren\'t available to your role.';
+      tone = 'text-amber-700';
+    } else {
+      text = 'No bank account available. Add a Checking or Savings account under Cash Management → Bank Accounts.';
+      tone = 'text-amber-700';
+    }
+    hint.className = `bank-mode-hint text-xs mt-1.5 ${tone}`;
+    hint.textContent = text;
+  };
+  render(bankSel.value);
+  modeSel.addEventListener('change', () => render(bankSel.value));
+}
+function wireModeOfPaymentToggle(accounts) {
   const sel = document.getElementById('field-modeOfPayment');
   const wrap = document.getElementById('mop-cheque-wrap');
   if (!sel || !wrap) return;
   sel.addEventListener('change', () => {
     wrap.classList.toggle('hidden', sel.value !== 'Cheque');
   });
+  if (accounts) wireModeBankFilter(accounts);
 }
 
 function spinnerHtml() {
@@ -5231,7 +5275,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     </form>
     <div id="dv-preview-wrap" class="hidden"></div>`);
   refreshIcons();
-  wireModeOfPaymentToggle();
+  wireModeOfPaymentToggle(bankAccounts);
 
   document.getElementById('dv-req-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('dv-req-form-error');
@@ -5410,7 +5454,7 @@ async function renderNewExpenseVoucherPage() {
     </form>
     <div id="dv-exp-preview-wrap" class="hidden"></div>`);
   refreshIcons();
-  wireModeOfPaymentToggle();
+  wireModeOfPaymentToggle(bankAccounts);
 
   document.getElementById('dv-exp-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('dv-exp-form-error');
@@ -5488,7 +5532,7 @@ async function renderNewFundTransferPage() {
     </form>
     <div id="dv-tr-preview-wrap" class="hidden"></div>`);
   refreshIcons();
-  wireModeOfPaymentToggle();
+  wireModeOfPaymentToggle(accounts);
 
   document.getElementById('dv-tr-preview-btn').addEventListener('click', async () => {
     const errBox = document.getElementById('dv-tr-form-error');
@@ -5741,7 +5785,7 @@ async function renderEditDisbursementVoucherPage(id) {
       </div>
     </form>`);
   refreshIcons();
-  wireModeOfPaymentToggle();
+  wireModeOfPaymentToggle(bankAccounts);
 
   document.getElementById('dv-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -6010,7 +6054,7 @@ async function renderNewCashAdvancePage() {
     </form>
     <div id="ca-preview-wrap" class="hidden"></div>`);
   refreshIcons();
-  wireModeOfPaymentToggle();
+  wireModeOfPaymentToggle(bankAccounts);
 
   document.getElementById('field-caEmployeeName').addEventListener('blur', () => {
     const name = document.getElementById('field-caEmployeeName').value.trim().toLowerCase();
