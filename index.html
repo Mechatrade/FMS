@@ -214,7 +214,7 @@ const NAV = [
       { name: "Sales Recognition", path: "finance/sales-recognition", description: "Recognize sales from fulfilled orders." },
       { name: "Accounts Receivable", path: "finance/accounts-receivable", description: "Track amounts owed by customers." },
       { name: "Accounts Payable", path: "finance/accounts-payable", description: "Track amounts owed to suppliers." },
-      { name: "Expenses", path: "finance/expenses", description: "Record and categorize company expenses." },
+      { name: "Expenses", path: "finance/expenses", description: "Read-only list of expense vouchers." },
       { name: "General Ledger", path: "finance/general-ledger", description: "View posted transactions across all accounts." },
       { name: "Journal Entries", path: "finance/journal-entries", description: "Create and review manual journal entries." },
       { name: "Tax", path: "finance/tax", description: "Track tax obligations and filings." },
@@ -898,7 +898,6 @@ function renderRoute() {
   const financeDynamicRoutes = {
     'finance/ar/new': { fn: renderNewAREntryPage, label: 'New Manual AR Entry', highlight: 'finance/accounts-receivable' },
     'finance/ap/new': { fn: renderNewAPEntryPage, label: 'New Payable', highlight: 'finance/accounts-payable' },
-    'finance/expenses/new': { fn: renderNewExpensePage, label: 'New Expense', highlight: 'finance/expenses' },
     'finance/tax/new': { fn: renderNewTaxPage, label: 'New Tax Record', highlight: 'finance/tax' },
   };
   if (financeDynamicRoutes[path]) {
@@ -915,14 +914,6 @@ function renderRoute() {
     setActiveNav('finance/accounts-receivable', NAV.find(n => n.path === 'finance'));
     buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Record Payment' });
     renderARPaymentPage(arId);
-    return;
-  }
-  if (path.startsWith('finance/expenses/edit/')) {
-    if (!canAccess('finance')) { renderNoAccess('Finance'); buildBreadcrumb(null, null); return; }
-    const expId = path.substring('finance/expenses/edit/'.length);
-    setActiveNav('finance/expenses', NAV.find(n => n.path === 'finance'));
-    buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Edit Expense' });
-    renderEditExpensePage(expId);
     return;
   }
   // AP/Expense/Tax payments now go through Disbursement Vouchers
@@ -985,7 +976,7 @@ function renderRoute() {
   if (path === 'cash-management/cash-position/new') {
     if (!canAccess('cash-management')) { renderNoAccess('Cash Management'); buildBreadcrumb(null, null); return; }
     setActiveNav('cash-management/cash-position', NAV.find(n => n.path === 'cash-management'));
-    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'Record Transaction' });
+    buildBreadcrumb(NAV.find(n => n.path === 'cash-management'), { name: 'Record Deposit' });
     renderNewCashTransactionPage();
     return;
   }
@@ -999,6 +990,20 @@ function renderRoute() {
   }
 
   // Dynamic Disbursement routes (not in NAV — reached via buttons/links on the Disbursement pages)
+  if (path === 'disbursement/vouchers/new-expense') {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    setActiveNav('disbursement/vouchers', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'New Expense' });
+    renderNewExpenseVoucherPage();
+    return;
+  }
+  if (path === 'disbursement/vouchers/new-transfer') {
+    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
+    setActiveNav('disbursement/vouchers', NAV.find(n => n.path === 'disbursement'));
+    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Fund Transfer' });
+    renderNewFundTransferPage();
+    return;
+  }
   if (path.startsWith('disbursement/vouchers/new/')) {
     if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
     const rest = path.substring('disbursement/vouchers/new/'.length);
@@ -2885,139 +2890,43 @@ async function renderNewAPEntryPage() {
     }
   });
 }
-async function renderAPPaymentPage(id) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let ap, bankAccounts = [];
-  try {
-    [ap, bankAccounts] = await Promise.all([fetchFinanceDoc('accountsPayable', id), fetchActiveBankAccounts()]);
-  } catch (e) {
-    console.error(e);
-    contentWrap(poLoadErrorHtml());
-    return;
-  }
-  if (!ap) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Entry not found.</p><a href="#/finance/accounts-payable" class="mt-4 text-sm text-forest hover:underline">Back to Accounts Payable</a></div>`);
-    return;
-  }
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Record Payment</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(ap.payee)}${ap.referenceNumber ? ' — ' + escapeAttr(ap.referenceNumber) : ''}</p>
-    </div>
-    <div class="card p-6 max-w-2xl mb-6">
-      <div class="grid grid-cols-3 gap-4 text-sm">
-        <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ap.amount)}</p></div>
-        <div><p class="text-xs text-muted uppercase">Paid So Far</p><p class="font-semibold text-charcoal mt-1">${formatCurrency(ap.amountPaid)}</p></div>
-        <div><p class="text-xs text-muted uppercase">Balance</p><p class="font-semibold text-forest mt-1">${formatCurrency(ap.balance)}</p></div>
-      </div>
-    </div>
-    <form id="pay-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${numberField('payAmount', 'Payment Amount (₱)', { required: true, step: '0.01', value: ap.balance })}
-        ${dateField('payDate', 'Payment Date', { required: true, value: todayISO() })}
-        ${selectField('payMethod', 'Payment Method', PAYMENT_METHODS, { required: true, value: 'Cash' })}
-        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
-        ${textField('payNotes', 'Notes / Reference')}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="pay-form-submit" type="submit" class="btn-primary"><span id="pay-form-submit-text">Record Payment</span></button>
-        <a href="#/finance/accounts-payable" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-
-  document.getElementById('pay-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('pay-form-submit');
-    const btnText = document.getElementById('pay-form-submit-text');
-    const errBox = document.getElementById('pay-form-error');
-    errBox.classList.add('hidden');
-    const payAmount = Number(document.getElementById('field-payAmount').value) || 0;
-    const payDate = document.getElementById('field-payDate').value;
-    const payMethod = document.getElementById('field-payMethod').value;
-    const payNotes = document.getElementById('field-payNotes').value.trim();
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel ? bankSel.value : '';
-    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
-
-    if (!payAmount || payAmount <= 0 || !payDate) {
-      errBox.textContent = 'Enter a valid payment amount and date.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (bankAccounts.length && !bankAccountId) {
-      errBox.textContent = 'Select which bank account this was paid from.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (payAmount > ap.balance + 0.01) {
-      errBox.textContent = `Payment cannot exceed the outstanding balance of ${formatCurrency(ap.balance)}.`;
-      errBox.classList.remove('hidden');
-      return;
-    }
-
-    btn.disabled = true; btnText.innerHTML = spinnerHtml();
-    try {
-      const newAmountPaid = Number((ap.amountPaid + payAmount).toFixed(2));
-      const newBalance = Number((ap.amount - newAmountPaid).toFixed(2));
-      const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
-      const payments = Array.isArray(ap.payments) ? [...ap.payments] : [];
-      payments.push({ date: payDate, amount: payAmount, method: payMethod, notes: payNotes, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
-
-      await updateFinanceDoc('accountsPayable', id, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
-      const cashAccountName = bankAccountName || 'Cash';
-      await postGLEntries([
-        { date: payDate, account: 'Accounts Payable', debit: payAmount, credit: 0, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id },
-        { date: payDate, account: cashAccountName, debit: 0, credit: payAmount, description: `Payment made — ${ap.payee}${ap.referenceNumber ? ' (' + ap.referenceNumber + ')' : ''}`, sourceType: 'ap-payment', sourceId: id, bankAccountId: bankAccountId || null },
-      ]);
-      navigateTo('finance/accounts-payable');
-    } catch (err) {
-      console.error(err);
-      errBox.textContent = 'Could not record this payment. Please try again.';
-      errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Record Payment';
-    }
-  });
-}
-
-/* ---- Expenses ---- */
-function expenseTableHtml(entries, vouchersBySource) {
-  if (!entries.length) {
+/* ---- Expenses (read-only — expenses are entered as Disbursement Vouchers) ---- */
+function expenseTableHtml(rows) {
+  if (!rows.length) {
     return `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
       <div class="w-12 h-12 rounded-full bg-cream flex items-center justify-center text-forest mb-3">${icon('inbox', 'w-5 h-5')}</div>
-      <p class="text-sm text-muted">No expenses recorded yet.</p>
+      <p class="text-sm text-muted">No expense vouchers yet.</p>
+      <a href="#/disbursement/vouchers/new-expense" class="mt-3 text-sm text-forest hover:underline">Create one under Disbursement</a>
     </div>`;
   }
   return `
     <div class="card overflow-x-auto">
       <table class="w-full text-sm">
         <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-          <th class="px-4 py-3">Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          <th class="px-4 py-3">Date</th><th class="px-4 py-3">DV #</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
         </tr></thead>
         <tbody>
-          ${entries.map(e => {
-            const dv = vouchersBySource ? vouchersBySource['expenses:' + e.id] : null;
+          ${rows.map(r => {
             let statusHtml, actionHtml;
-            if (e.status === 'Paid') {
+            if (r.dv) {
+              statusHtml = dvStatusBadge(r.dv.status);
+              actionHtml = `<a href="#/disbursement/vouchers/view/${r.dv.id}" class="btn-glass-sm">View</a>`;
+            } else if (r.legacy.status === 'Paid') {
               statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-teal-50 text-teal-700 border-teal-200">Paid</span>`;
               actionHtml = '<span class="text-xs text-muted">—</span>';
-            } else if (dv && (dv.status === 'Pending' || dv.status === 'Approved')) {
-              const cls = dv.status === 'Approved' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200';
-              statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}">${dvStatusLabel(dv.status)}</span>`;
-              actionHtml = `<a href="#/disbursement/vouchers/view/${dv.id}" class="btn-glass-sm">View Request</a>`;
             } else {
+              // An older expense record that never got a voucher — still requestable so nothing is stranded.
               statusHtml = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-gray-50 text-gray-600 border-gray-200">For Request Disbursement</span>`;
-              actionHtml = `<a href="#/finance/expenses/edit/${e.id}" class="btn-glass-sm">Edit</a> <a href="#/disbursement/vouchers/new/expenses/${e.id}" class="btn-glass-sm">Request Disbursement</a>`;
+              actionHtml = `<a href="#/disbursement/vouchers/new/expenses/${r.legacy.id}" class="btn-glass-sm">Request Disbursement</a>`;
             }
             return `
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
-                <td class="px-4 py-3">${formatDate(e.date)}</td>
-                <td class="px-4 py-3">${e.category || '—'}</td>
-                <td class="px-4 py-3">${e.payee || '—'}</td>
-                <td class="px-4 py-3">${formatCurrency(e.amount)}</td>
-                <td class="px-4 py-3">${e.paymentMethod || '—'}</td>
+                <td class="px-4 py-3">${formatDate(r.date)}</td>
+                <td class="px-4 py-3 font-medium text-charcoal">${r.dv ? r.dv.number : '—'}</td>
+                <td class="px-4 py-3">${r.category || '—'}</td>
+                <td class="px-4 py-3">${r.payee || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(r.amount)}</td>
+                <td class="px-4 py-3">${r.method || '—'}</td>
                 <td class="px-4 py-3">${statusHtml}</td>
                 <td class="px-4 py-3 text-right">${actionHtml}</td>
               </tr>`;
@@ -3026,228 +2935,33 @@ function expenseTableHtml(entries, vouchersBySource) {
       </table>
     </div>`;
 }
-async function renderExpensePaymentPage(id) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let exp, bankAccounts = [];
-  try {
-    [exp, bankAccounts] = await Promise.all([fetchFinanceDoc('expenses', id), fetchActiveBankAccounts()]);
-  } catch (e) {
-    console.error(e);
-    contentWrap(poLoadErrorHtml());
-    return;
-  }
-  if (!exp) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Expense not found.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
-    return;
-  }
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Mark Expense Paid</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(exp.category)}${exp.payee ? ' — ' + escapeAttr(exp.payee) : ''} · ${formatCurrency(exp.amount)}</p>
-    </div>
-    <form id="exp-pay-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="exp-pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('datePaid', 'Payment Date', { required: true, value: todayISO() })}
-        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="exp-pay-form-submit" type="submit" class="btn-primary"><span id="exp-pay-form-submit-text">Mark Paid</span></button>
-        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-
-  document.getElementById('exp-pay-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('exp-pay-form-submit');
-    const btnText = document.getElementById('exp-pay-form-submit-text');
-    const errBox = document.getElementById('exp-pay-form-error');
-    errBox.classList.add('hidden');
-    const datePaid = document.getElementById('field-datePaid').value;
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel ? bankSel.value : '';
-    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
-
-    if (!datePaid) {
-      errBox.textContent = 'Enter the payment date.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (bankAccounts.length && !bankAccountId) {
-      errBox.textContent = 'Select which bank account this was paid from.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-
-    btn.disabled = true; btnText.innerHTML = spinnerHtml();
-    try {
-      await updateFinanceDoc('expenses', id, { status: 'Paid', datePaid, bankAccountId, bankAccountName });
-      const cashAccountName = bankAccountName || 'Cash';
-      await postGLEntries([
-        { date: datePaid, account: exp.category, debit: exp.amount, credit: 0, description: `Expense paid — ${exp.category}`, sourceType: 'expense', sourceId: id },
-        { date: datePaid, account: cashAccountName, debit: 0, credit: exp.amount, description: `Expense paid — ${exp.category}`, sourceType: 'expense', sourceId: id, bankAccountId: bankAccountId || null },
-      ]);
-      navigateTo('finance/expenses');
-    } catch (err) {
-      console.error(err);
-      errBox.textContent = 'Could not update this expense. Please try again.';
-      errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Mark Paid';
-    }
-  });
-}
 async function renderExpensesPage() {
   contentWrap(`
-    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
-      <div>
-        <h1 class="text-xl font-semibold text-charcoal">Expenses</h1>
-        <p class="text-sm text-muted mt-1">Company expenses. Posts to the General Ledger once the Disbursement Voucher is paid.</p>
-      </div>
-      <a href="#/finance/expenses/new" class="btn-primary text-sm">+ New Expense</a>
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Expenses</h1>
+      <p class="text-sm text-muted mt-1">Read-only list of expense vouchers. Expenses are entered under <a href="#/disbursement/vouchers" class="text-forest hover:underline">Disbursement → Disbursement Vouchers</a> and post to the General Ledger once the voucher is paid.</p>
     </div>
     <div id="exp-list-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
   try {
-    const [entries, vouchers] = await Promise.all([fetchFinanceCollection('expenses'), fetchFinanceCollection('disbursementVouchers')]);
-    const vouchersBySource = {};
+    const [legacyExpenses, vouchers] = await Promise.all([fetchFinanceCollection('expenses'), fetchFinanceCollection('disbursementVouchers')]);
+    const referenced = new Set(vouchers.filter(v => v.sourceCollection === 'expenses').map(v => v.sourceId));
+    const rows = [];
     vouchers.forEach(v => {
-      if (v.sourceCollection === 'expenses' && v.sourceId) {
-        const key = 'expenses:' + v.sourceId;
-        if (!vouchersBySource[key]) vouchersBySource[key] = v;
+      if (v.type === 'Expense' || (v.type === 'Regular Payment' && v.sourceCollection === 'expenses')) {
+        rows.push({ date: v.dateRequested, category: v.accountTitle, payee: v.payee, amount: v.amount, method: v.modeOfPayment, dv: v });
       }
     });
-    document.getElementById('exp-list-container').innerHTML = expenseTableHtml(entries, vouchersBySource);
+    legacyExpenses.filter(e => !referenced.has(e.id)).forEach(e => {
+      rows.push({ date: e.date, category: e.category, payee: e.payee, amount: e.amount, method: e.paymentMethod, legacy: e });
+    });
+    rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    document.getElementById('exp-list-container').innerHTML = expenseTableHtml(rows);
     refreshIcons();
   } catch (e) {
     console.error(e);
     document.getElementById('exp-list-container').innerHTML = poLoadErrorHtml();
   }
-}
-async function renderNewExpensePage() {
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">New Expense</h1>
-      <p class="text-sm text-muted mt-1">This posts to the General Ledger once marked Paid.</p>
-    </div>
-    <form id="exp-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="exp-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('date', 'Date', { required: true, value: todayISO() })}
-        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true })}
-        ${textField('payee', 'Payee / Vendor')}
-        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01' })}
-        ${selectField('paymentMethod', 'Payment Method', PAYMENT_METHODS, { value: 'Cash' })}
-        ${textareaField('description', 'Description', { span2: true })}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="exp-form-submit" type="submit" class="btn-primary"><span id="exp-form-submit-text">Save Expense</span></button>
-        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-  document.getElementById('exp-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('exp-form-submit');
-    const btnText = document.getElementById('exp-form-submit-text');
-    const errBox = document.getElementById('exp-form-error');
-    errBox.classList.add('hidden');
-    const val = (id) => document.getElementById('field-' + id).value.trim();
-    const date = val('date'), category = val('category'), payee = val('payee'), amount = Number(val('amount')) || 0, paymentMethod = val('paymentMethod'), description = val('description');
-    if (!date || !category || !amount) {
-      errBox.textContent = 'Please fill in all required fields.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    btn.disabled = true; btnText.innerHTML = spinnerHtml();
-    try {
-      await createFinanceDoc('expenses', { date, category, payee, amount, paymentMethod, description, status: 'Unpaid' });
-      navigateTo('finance/expenses');
-    } catch (err) {
-      console.error(err);
-      errBox.textContent = 'Could not save this expense. Please try again.';
-      errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Save Expense';
-    }
-  });
-}
-async function renderEditExpensePage(id) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let exp;
-  try {
-    exp = await fetchFinanceDoc('expenses', id);
-  } catch (e) {
-    console.error(e);
-    contentWrap(poLoadErrorHtml());
-    return;
-  }
-  if (!exp) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Expense not found.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
-    return;
-  }
-  if (exp.status === 'Paid') {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">This expense is already Paid and can't be edited.</p><a href="#/finance/expenses" class="mt-4 text-sm text-forest hover:underline">Back to Expenses</a></div>`);
-    return;
-  }
-  try {
-    const vouchers = await fetchFinanceCollection('disbursementVouchers');
-    const activeDV = vouchers.find(v => v.sourceCollection === 'expenses' && v.sourceId === id && (v.status === 'Pending' || v.status === 'Approved'));
-    if (activeDV) {
-      contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
-        <p class="text-sm text-charcoal font-medium">A disbursement request is already active for this expense.</p>
-        <p class="text-sm text-muted mt-1">Edit it from the voucher's own Edit & Resubmit instead, or wait until it's Paid or Cancelled.</p>
-        <a href="#/disbursement/vouchers/view/${activeDV.id}" class="mt-4 text-sm text-forest hover:underline">View Request</a>
-      </div>`);
-      return;
-    }
-  } catch (e) { console.error(e); }
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Edit Expense</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(exp.category)}${exp.payee ? ' — ' + escapeAttr(exp.payee) : ''}</p>
-    </div>
-    <form id="exp-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="exp-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('date', 'Date', { required: true, value: exp.date })}
-        ${selectField('category', 'Category', EXPENSE_ACCOUNTS, { required: true, value: exp.category })}
-        ${textField('payee', 'Payee / Vendor', { value: exp.payee })}
-        ${numberField('amount', 'Amount (₱)', { required: true, step: '0.01', value: exp.amount })}
-        ${selectField('paymentMethod', 'Payment Method', PAYMENT_METHODS, { value: exp.paymentMethod || 'Cash' })}
-        ${textareaField('description', 'Description', { span2: true, value: exp.description })}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="exp-form-submit" type="submit" class="btn-primary"><span id="exp-form-submit-text">Save Changes</span></button>
-        <a href="#/finance/expenses" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-  document.getElementById('exp-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('exp-form-submit');
-    const btnText = document.getElementById('exp-form-submit-text');
-    const errBox = document.getElementById('exp-form-error');
-    errBox.classList.add('hidden');
-    const val = (fieldId) => document.getElementById('field-' + fieldId).value.trim();
-    const date = val('date'), category = val('category'), payee = val('payee'), amount = Number(val('amount')) || 0, paymentMethod = val('paymentMethod'), description = val('description');
-    if (!date || !category || !amount) {
-      errBox.textContent = 'Please fill in all required fields.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    btn.disabled = true; btnText.innerHTML = spinnerHtml();
-    try {
-      await updateFinanceDoc('expenses', id, { date, category, payee, amount, paymentMethod, description });
-      navigateTo('finance/expenses');
-    } catch (err) {
-      console.error(err);
-      errBox.textContent = 'Could not save changes. Please try again.';
-      errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Save Changes';
-    }
-  });
 }
 
 /* ---- Journal Entries ---- */
@@ -3441,78 +3155,6 @@ function taxTableHtml(entries) {
         </tbody>
       </table>
     </div>`;
-}
-async function renderTaxPaymentPage(id) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let tax, bankAccounts = [];
-  try {
-    [tax, bankAccounts] = await Promise.all([fetchFinanceDoc('taxRecords', id), fetchActiveBankAccounts()]);
-  } catch (e) {
-    console.error(e);
-    contentWrap(poLoadErrorHtml());
-    return;
-  }
-  if (!tax) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Tax record not found.</p><a href="#/finance/tax" class="mt-4 text-sm text-forest hover:underline">Back to Tax</a></div>`);
-    return;
-  }
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Mark Tax Paid</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(tax.taxType)} — ${escapeAttr(tax.period)} · ${formatCurrency(tax.taxAmount)}</p>
-    </div>
-    <form id="tax-pay-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="tax-pay-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('datePaid', 'Payment Date', { required: true, value: todayISO() })}
-        ${bankAccounts.length ? bankAccountSelectHtml(bankAccounts, null, { required: true }) : ''}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="tax-pay-form-submit" type="submit" class="btn-primary"><span id="tax-pay-form-submit-text">Mark Paid</span></button>
-        <a href="#/finance/tax" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-
-  document.getElementById('tax-pay-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById('tax-pay-form-submit');
-    const btnText = document.getElementById('tax-pay-form-submit-text');
-    const errBox = document.getElementById('tax-pay-form-error');
-    errBox.classList.add('hidden');
-    const datePaid = document.getElementById('field-datePaid').value;
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel ? bankSel.value : '';
-    const bankAccountName = bankSel && bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
-
-    if (!datePaid) {
-      errBox.textContent = 'Enter the payment date.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (bankAccounts.length && !bankAccountId) {
-      errBox.textContent = 'Select which bank account this was paid from.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-
-    btn.disabled = true; btnText.innerHTML = spinnerHtml();
-    try {
-      await updateFinanceDoc('taxRecords', id, { filingStatus: 'Paid', datePaid, bankAccountId, bankAccountName });
-      const cashAccountName = bankAccountName || 'Cash';
-      await postGLEntries([
-        { date: datePaid, account: 'Taxes & Licenses Expense', debit: tax.taxAmount, credit: 0, description: 'Tax paid', sourceType: 'tax', sourceId: id },
-        { date: datePaid, account: cashAccountName, debit: 0, credit: tax.taxAmount, description: 'Tax paid', sourceType: 'tax', sourceId: id, bankAccountId: bankAccountId || null },
-      ]);
-      navigateTo('finance/tax');
-    } catch (err) {
-      console.error(err);
-      errBox.textContent = 'Could not update this tax record. Please try again.';
-      errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Mark Paid';
-    }
-  });
 }
 async function renderTaxPage() {
   contentWrap(`
@@ -4668,7 +4310,6 @@ async function renderSupplierPaymentsPage() {
    ========================================================================== */
 const BANK_ACCOUNT_TYPES = ['Checking', 'Savings', 'Cash', 'Other'];
 const BANK_ACCOUNT_STATUSES = ['Active', 'Inactive'];
-const CASH_TXN_TYPES = ['Deposit', 'Withdrawal', 'Transfer'];
 
 function maskAccountNumber(num) {
   if (!num) return '';
@@ -4885,15 +4526,15 @@ async function renderEditBankAccountPage(id) {
   });
 }
 
-/* ---- Cash Position + Record Transaction ---- */
+/* ---- Cash Position + Record Deposit ---- */
 async function renderCashPositionPage() {
   contentWrap(`
     <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
       <div>
         <h1 class="text-xl font-semibold text-charcoal">Cash Position</h1>
-        <p class="text-sm text-muted mt-1">Balances reflect AR/AP/Expense/Tax payments tagged to each account, plus transactions recorded here directly.</p>
+        <p class="text-sm text-muted mt-1">Balances reflect receipts, voucher payments and transfers tagged to each account, plus deposits recorded here.</p>
       </div>
-      <a href="#/cash-management/cash-position/new" class="btn-primary text-sm">+ Record Transaction</a>
+      <a href="#/cash-management/cash-position/new" class="btn-primary text-sm">+ Record Deposit</a>
     </div>
     <div id="cash-position-summary" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">Loading...</div>
     <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Cash Activity</h2>
@@ -4958,13 +4599,13 @@ async function renderNewCashTransactionPage() {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let accounts = [];
   try {
-    accounts = await fetchFinanceCollection('bankAccounts');
+    accounts = await fetchActiveBankAccounts();
   } catch (e) { console.error(e); }
 
   if (!accounts.length) {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
       <p class="text-sm text-charcoal font-medium">No bank accounts yet.</p>
-      <p class="text-sm text-muted mt-1">Add a bank account first before recording a cash transaction.</p>
+      <p class="text-sm text-muted mt-1">Add a bank account first before recording a deposit.</p>
       <a href="#/cash-management/bank-accounts/new" class="mt-4 btn-primary text-sm">+ New Bank Account</a>
     </div>`);
     return;
@@ -4972,48 +4613,14 @@ async function renderNewCashTransactionPage() {
 
   contentWrap(`
     <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Record Transaction</h1>
-      <p class="text-sm text-muted mt-1">For cash movements that don't come from AR, AP, Expenses, or Tax — capital, transfers, bank fees, etc.</p>
+      <h1 class="text-xl font-semibold text-charcoal">Record Deposit</h1>
+      <p class="text-sm text-muted mt-1">Money coming in that doesn't come through Accounts Receivable — capital, interest, refunds and the like. Money going out (withdrawals, transfers between accounts) is entered as a voucher under Disbursement.</p>
     </div>
     <form id="cash-txn-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="cash-txn-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${selectField('txnType', 'Transaction Type', CASH_TXN_TYPES, { required: true, value: 'Deposit' })}
         ${numberField('txnAmount', 'Amount (₱)', { required: true, step: '0.01' })}
         ${dateField('txnDate', 'Date', { required: true, value: todayISO() })}
-      </div>
-      <div id="cash-txn-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
-      ${textareaField('txnDescription', 'Description', { span2: true })}
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="cash-txn-form-submit" type="submit" class="btn-primary"><span id="cash-txn-form-submit-text">Save Transaction</span></button>
-        <a href="#/cash-management/cash-position" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>`);
-  refreshIcons();
-
-  const fieldsContainer = document.getElementById('cash-txn-fields');
-  const typeSel = document.getElementById('field-txnType');
-
-  function renderTypeFields() {
-    const type = typeSel.value;
-    if (type === 'Transfer') {
-      fieldsContainer.innerHTML = `
-        <div>
-          <label class="block text-sm font-medium text-charcoal mb-1.5">From Account <span class="text-red-500">*</span></label>
-          <select id="field-fromBankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
-            <option value="">Select...</option>
-            ${accounts.map(a => `<option value="${a.id}">${escapeAttr(a.nickname)}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-charcoal mb-1.5">To Account <span class="text-red-500">*</span></label>
-          <select id="field-toBankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
-            <option value="">Select...</option>
-            ${accounts.map(a => `<option value="${a.id}">${escapeAttr(a.nickname)}</option>`).join('')}
-          </select>
-        </div>`;
-    } else {
-      fieldsContainer.innerHTML = `
         <div>
           <label class="block text-sm font-medium text-charcoal mb-1.5">Bank Account <span class="text-red-500">*</span></label>
           <select id="field-bankAccountId" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
@@ -5022,16 +4629,20 @@ async function renderNewCashTransactionPage() {
           </select>
         </div>
         <div>
-          <label class="block text-sm font-medium text-charcoal mb-1.5">${type === 'Deposit' ? 'Source' : 'Category'} <span class="text-red-500">*</span></label>
+          <label class="block text-sm font-medium text-charcoal mb-1.5">Source <span class="text-red-500">*</span></label>
           <select id="field-offsetAccount" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
             <option value="">Select...</option>
             ${CASH_OFFSET_ACCOUNTS.map(a => `<option value="${a}">${a}</option>`).join('')}
           </select>
-        </div>`;
-    }
-  }
-  renderTypeFields();
-  typeSel.addEventListener('change', renderTypeFields);
+        </div>
+      </div>
+      ${textareaField('txnDescription', 'Description', { span2: true })}
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="cash-txn-form-submit" type="submit" class="btn-primary"><span id="cash-txn-form-submit-text">Save Deposit</span></button>
+        <a href="#/cash-management/cash-position" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>`);
+  refreshIcons();
 
   document.getElementById('cash-txn-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -5040,66 +4651,33 @@ async function renderNewCashTransactionPage() {
     const errBox = document.getElementById('cash-txn-form-error');
     errBox.classList.add('hidden');
 
-    const type = typeSel.value;
     const amount = Number(document.getElementById('field-txnAmount').value) || 0;
     const date = document.getElementById('field-txnDate').value;
     const description = document.getElementById('field-txnDescription').value.trim();
+    const bankSel = document.getElementById('field-bankAccountId');
+    const offsetAccount = document.getElementById('field-offsetAccount').value;
+    const bankAccountId = bankSel.value;
 
-    if (!amount || amount <= 0 || !date) {
-      errBox.textContent = 'Enter a valid amount and date.';
+    if (!amount || amount <= 0 || !date || !bankAccountId || !offsetAccount) {
+      errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
     }
+    const bankAccountName = bankSel.options[bankSel.selectedIndex].text;
 
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
-      if (type === 'Transfer') {
-        const fromSel = document.getElementById('field-fromBankAccountId');
-        const toSel = document.getElementById('field-toBankAccountId');
-        const fromId = fromSel.value, toId = toSel.value;
-        if (!fromId || !toId || fromId === toId) {
-          errBox.textContent = 'Select two different accounts to transfer between.';
-          errBox.classList.remove('hidden');
-          btn.disabled = false; btnText.textContent = 'Save Transaction';
-          return;
-        }
-        const fromName = fromSel.options[fromSel.selectedIndex].text;
-        const toName = toSel.options[toSel.selectedIndex].text;
-        const txnRef = await createFinanceDoc('cashTransactions', { type, amount, date, description, fromBankAccountId: fromId, fromBankAccountName: fromName, toBankAccountId: toId, toBankAccountName: toName });
-        await postGLEntries([
-          { date, account: toName, debit: amount, credit: 0, description: description || `Transfer from ${fromName} to ${toName}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId: toId },
-          { date, account: fromName, debit: 0, credit: amount, description: description || `Transfer from ${fromName} to ${toName}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId: fromId },
-        ]);
-      } else {
-        const bankSel = document.getElementById('field-bankAccountId');
-        const offsetSel = document.getElementById('field-offsetAccount');
-        const bankAccountId = bankSel.value, offsetAccount = offsetSel.value;
-        if (!bankAccountId || !offsetAccount) {
-          errBox.textContent = 'Please fill in all required fields.';
-          errBox.classList.remove('hidden');
-          btn.disabled = false; btnText.textContent = 'Save Transaction';
-          return;
-        }
-        const bankAccountName = bankSel.options[bankSel.selectedIndex].text;
-        const txnRef = await createFinanceDoc('cashTransactions', { type, amount, date, description, bankAccountId, bankAccountName, offsetAccount });
-        if (type === 'Deposit') {
-          await postGLEntries([
-            { date, account: bankAccountName, debit: amount, credit: 0, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId },
-            { date, account: offsetAccount, debit: 0, credit: amount, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id },
-          ]);
-        } else {
-          await postGLEntries([
-            { date, account: offsetAccount, debit: amount, credit: 0, description: description || `Withdrawal — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id },
-            { date, account: bankAccountName, debit: 0, credit: amount, description: description || `Withdrawal — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId },
-          ]);
-        }
-      }
+      const txnRef = await createFinanceDoc('cashTransactions', { type: 'Deposit', amount, date, description, bankAccountId, bankAccountName, offsetAccount });
+      await postGLEntries([
+        { date, account: bankAccountName, debit: amount, credit: 0, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id, bankAccountId },
+        { date, account: offsetAccount, debit: 0, credit: amount, description: description || `Deposit — ${offsetAccount}`, sourceType: 'cash-transaction', sourceId: txnRef.id },
+      ]);
       navigateTo('cash-management/cash-position');
     } catch (err) {
       console.error(err);
-      errBox.textContent = 'Could not save this transaction. Please try again.';
+      errBox.textContent = 'Could not save this deposit. Please try again.';
       errBox.classList.remove('hidden');
-      btn.disabled = false; btnText.textContent = 'Save Transaction';
+      btn.disabled = false; btnText.textContent = 'Save Deposit';
     }
   });
 }
@@ -5312,7 +4890,7 @@ async function renderCashForecastPage() {
    cashAdvances, encashmentBatches — Cash Funds reuse
    bankAccounts with accountType 'Cash')
    ========================================================================== */
-const DV_TYPES = ['Regular Payment', 'Cash Advance Release'];
+const DV_TYPES = ['Regular Payment', 'Expense', 'Fund Transfer', 'Cash Advance Release'];
 // Retired voucher types: Petty Cash was removed from the system. Any old voucher of
 // these types stays visible for the record, but can't be approved, batched, paid or
 // resubmitted — only cancelled (so nothing is left stuck).
@@ -5503,17 +5081,42 @@ async function executeCashAdvanceLiquidation(ca, id, pending) {
   await postGLEntries(glLines);
   return shortfallAPId;
 }
+// Direct expense voucher: pays an expense category straight from a bank/cash account.
+async function executeExpenseDV(dv) {
+  const { accountTitle, amount, bankAccountId, bankAccountName, datePaid, number, payee, id } = dv;
+  const desc = `Expense paid — ${accountTitle}${payee ? ' (' + payee + ')' : ''} (DV ${number})`;
+  await postGLEntries([
+    { date: datePaid, account: accountTitle, debit: amount, credit: 0, description: desc, sourceType: 'expense-voucher', sourceId: id },
+    { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: desc, sourceType: 'expense-voucher', sourceId: id, bankAccountId },
+  ]);
+}
+// Fund transfer voucher: moves money between two of the company's own accounts.
+async function executeFundTransferDV(dv) {
+  const { amount, bankAccountId, bankAccountName, toBankAccountId, toBankAccountName, datePaid, number, id } = dv;
+  const desc = `Fund transfer — ${bankAccountName} to ${toBankAccountName} (DV ${number})`;
+  await postGLEntries([
+    { date: datePaid, account: toBankAccountName, debit: amount, credit: 0, description: desc, sourceType: 'fund-transfer', sourceId: id, bankAccountId: toBankAccountId },
+    { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: desc, sourceType: 'fund-transfer', sourceId: id, bankAccountId },
+  ]);
+}
 async function executeDisbursementVoucher(dv) {
   if (dv.type === 'Regular Payment') return executeRegularPaymentDV(dv);
+  if (dv.type === 'Expense') return executeExpenseDV(dv);
+  if (dv.type === 'Fund Transfer') return executeFundTransferDV(dv);
   if (dv.type === 'Cash Advance Release') return executeCashAdvanceReleaseDV(dv);
   // Never silently mark an unrecognised/retired voucher as paid without posting anything.
   throw new Error('Unsupported voucher type: ' + dv.type);
 }
 async function dvRequiresBatching(dv) {
-  if (dv.type !== 'Regular Payment') return true;
-  if (!dv.bankAccountId) return false;
-  const bankAccount = await fetchFinanceDoc('bankAccounts', dv.bankAccountId);
-  return !!(bankAccount && bankAccount.accountType === 'Cash');
+  if (dv.type === 'Cash Advance Release' || isRetiredDVType(dv.type)) return true;
+  // Regular Payment / Expense / Fund Transfer: batching only when physical cash is involved
+  // (a Cash-type account on either side).
+  const ids = [dv.bankAccountId, dv.toBankAccountId].filter(Boolean);
+  for (const accId of ids) {
+    const acc = await fetchFinanceDoc('bankAccounts', accId);
+    if (acc && acc.accountType === 'Cash') return true;
+  }
+  return false;
 }
 
 /* ---- Disbursement Vouchers: list ---- */
@@ -5548,9 +5151,15 @@ function dvTableHtml(vouchers) {
 }
 async function renderDisbursementVouchersPage() {
   contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Disbursement Vouchers</h1>
-      <p class="text-sm text-muted mt-1">All payment requests, approvals, and cash releases. Use Request Disbursement from Accounts Payable, Expenses, or Tax to create one.</p>
+    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Disbursement Vouchers</h1>
+        <p class="text-sm text-muted mt-1">Every payment goes through a voucher. Enter an expense or a transfer between accounts here; AP and Tax payments are requested from their own pages, and Cash Advances from Cash Advances.</p>
+      </div>
+      <div class="flex gap-3">
+        <a href="#/disbursement/vouchers/new-transfer" class="btn-glass-sm text-sm">+ Fund Transfer</a>
+        <a href="#/disbursement/vouchers/new-expense" class="btn-primary text-sm">+ New Expense</a>
+      </div>
     </div>
     <div id="dv-list-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
@@ -5714,6 +5323,212 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
   });
 }
 
+/* ---- Direct vouchers: Expense + Fund Transfer (entered here — every cash-out has a voucher) ---- */
+function isCashAccount(accounts, id) { return accounts.find(b => b.id === id)?.accountType === 'Cash'; }
+function dvRequestPreviewHtml(d) {
+  const cell = (label, value, wide) => `<div class="${wide ? 'col-span-2' : ''}"><p class="text-xs text-muted uppercase">${label}</p><p class="font-medium text-charcoal mt-0.5">${value}</p></div>`;
+  return `
+    <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
+      ${voucherStampHtml('Pending')}
+      ${voucherLetterheadHtml('Disbursement Voucher', 'DV No.', d.number, dvStatusLabel('Pending'), 'Date Requested', formatDate(d.dateRequested))}
+      <div class="grid grid-cols-2 gap-4 text-sm mt-6">
+        ${cell('Payee', escapeAttr(d.payee))}
+        <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(d.amount)}</p></div>
+        ${cell('Account Title', escapeAttr(d.accountTitle))}
+        ${cell('Mode of Payment', escapeAttr(d.modeOfPayment))}
+        ${d.chequeNo ? cell('Cheque No.', escapeAttr(d.chequeNo)) : ''}
+        ${cell(d.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account', escapeAttr(d.bankAccountName))}
+        ${d.toBankAccountName ? cell('Transfer To', escapeAttr(d.toBankAccountName)) : ''}
+        ${cell('Requested By', escapeAttr(d.requestedBy))}
+        ${cell('Purpose', escapeAttr(d.purpose), true)}
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-sm mt-8 pt-6 border-t border-borderc">
+        <div><p class="text-xs text-muted">Prepared By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
+        <div><p class="text-xs text-muted">Approved By</p><div class="h-10 border-b border-borderc mt-6"></div></div>
+      </div>
+      ${voucherFooterHtml()}
+    </div>
+    <div id="dv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+    <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
+      <button type="button" id="dv-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
+      <button type="button" id="dv-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
+    </div>`;
+}
+function showDvRequestPreview(draft, formId, wrapId, requiresBatching) {
+  document.getElementById(formId).classList.add('hidden');
+  const wrap = document.getElementById(wrapId);
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = dvRequestPreviewHtml(draft);
+  refreshIcons();
+  document.getElementById('dv-preview-back').addEventListener('click', () => {
+    wrap.classList.add('hidden');
+    wrap.innerHTML = '';
+    document.getElementById(formId).classList.remove('hidden');
+  });
+  document.getElementById('dv-preview-confirm').addEventListener('click', async () => {
+    const btn = document.getElementById('dv-preview-confirm');
+    const perr = document.getElementById('dv-preview-error');
+    perr.classList.add('hidden');
+    btn.disabled = true; btn.innerHTML = spinnerHtml();
+    try {
+      await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching });
+      refreshApprovalsBadge();
+      navigateTo('disbursement/vouchers');
+    } catch (err) {
+      console.error(err);
+      perr.textContent = 'Could not submit this voucher. Please try again.';
+      perr.classList.remove('hidden');
+      btn.disabled = false; btn.textContent = 'Confirm & Submit';
+    }
+  });
+}
+async function renderNewExpenseVoucherPage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let bankAccounts = [];
+  try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">New Expense</h1>
+      <p class="text-sm text-muted mt-1">Every expense is entered as a Disbursement Voucher. It needs approval before it is paid and posted to the books.</p>
+    </div>
+    <form id="dv-exp-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="dv-exp-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${textField('expPayee', 'Payee / Vendor', { required: true })}
+        ${selectField('expCategory', 'Category (Account Title)', EXPENSE_ACCOUNTS, { required: true })}
+        ${numberField('expAmount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('expDate', 'Date', { required: true, value: todayISO() })}
+        ${modeOfPaymentFieldHtml('Cash', '')}
+        ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
+        ${textareaField('expPurpose', 'Description', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="dv-exp-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="dv-exp-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+  wireModeOfPaymentToggle();
+
+  document.getElementById('dv-exp-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('dv-exp-form-error');
+    errBox.classList.add('hidden');
+    const payee = document.getElementById('field-expPayee').value.trim();
+    const category = document.getElementById('field-expCategory').value;
+    const amount = Number(document.getElementById('field-expAmount').value) || 0;
+    const date = document.getElementById('field-expDate').value;
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
+    const bankSel = document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel.value;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+    const purpose = document.getElementById('field-expPurpose').value.trim() || `Expense — ${category}`;
+
+    if (!payee || !category || !amount || amount <= 0 || !date || !bankAccountId) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    const number = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
+    const draft = {
+      number, type: 'Expense', payee, amount, purpose, modeOfPayment, chequeNo,
+      bankAccountId, bankAccountName, accountTitle: category,
+      requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
+    };
+    showDvRequestPreview(draft, 'dv-exp-form', 'dv-exp-preview-wrap', isCashAccount(bankAccounts, bankAccountId));
+  });
+}
+async function renderNewFundTransferPage() {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let accounts = [];
+  try { accounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+  if (accounts.length < 2) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+      <p class="text-sm text-charcoal font-medium">A transfer needs at least two accounts you can use.</p>
+      <p class="text-sm text-muted mt-1">Add another bank account or cash fund first.</p>
+      <a href="#/cash-management/bank-accounts" class="mt-4 text-sm text-forest hover:underline">Go to Bank Accounts</a>
+    </div>`);
+    return;
+  }
+  const opts = accounts.map(b => `<option value="${b.id}">${escapeAttr(b.nickname)}${b.bankName ? ' — ' + escapeAttr(b.bankName) : ''}</option>`).join('');
+  const acctSelect = (id, label) => `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">${label} <span class="text-red-500">*</span></label>
+      <select id="${id}" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">Select...</option>${opts}
+      </select>
+    </div>`;
+
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Fund Transfer</h1>
+      <p class="text-sm text-muted mt-1">Move money between two of your own accounts — for example, withdrawing from the bank into a cash fund. It needs approval like any other voucher.</p>
+    </div>
+    <form id="dv-tr-form" class="card p-6 space-y-4 max-w-2xl">
+      <div id="dv-tr-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${acctSelect('field-bankAccountId', 'Transfer From')}
+        ${acctSelect('field-toBankAccountId', 'Transfer To')}
+        ${numberField('trAmount', 'Amount (₱)', { required: true, step: '0.01' })}
+        ${dateField('trDate', 'Date', { required: true, value: todayISO() })}
+        ${modeOfPaymentFieldHtml('Cash', '')}
+        ${textareaField('trPurpose', 'Purpose', { span2: true })}
+      </div>
+      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
+        <button id="dv-tr-preview-btn" type="button" class="btn-primary">Preview</button>
+        <a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal">Cancel</a>
+      </div>
+    </form>
+    <div id="dv-tr-preview-wrap" class="hidden"></div>`);
+  refreshIcons();
+  wireModeOfPaymentToggle();
+
+  document.getElementById('dv-tr-preview-btn').addEventListener('click', async () => {
+    const errBox = document.getElementById('dv-tr-form-error');
+    errBox.classList.add('hidden');
+    const fromSel = document.getElementById('field-bankAccountId');
+    const toSel = document.getElementById('field-toBankAccountId');
+    const fromId = fromSel.value, toId = toSel.value;
+    const fromName = fromId ? fromSel.options[fromSel.selectedIndex].text : '';
+    const toName = toId ? toSel.options[toSel.selectedIndex].text : '';
+    const amount = Number(document.getElementById('field-trAmount').value) || 0;
+    const date = document.getElementById('field-trDate').value;
+    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
+    const purpose = document.getElementById('field-trPurpose').value.trim() || `Fund transfer — ${fromName} to ${toName}`;
+
+    if (!fromId || !toId || !amount || amount <= 0 || !date) {
+      errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (fromId === toId) {
+      errBox.textContent = 'Choose two different accounts.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (modeOfPayment === 'Cheque' && !chequeNo) {
+      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    const number = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
+    const draft = {
+      number, type: 'Fund Transfer', payee: toName, amount, purpose, modeOfPayment, chequeNo,
+      bankAccountId: fromId, bankAccountName: fromName, toBankAccountId: toId, toBankAccountName: toName,
+      accountTitle: toName, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
+    };
+    showDvRequestPreview(draft, 'dv-tr-form', 'dv-tr-preview-wrap', isCashAccount(accounts, fromId) || isCashAccount(accounts, toId));
+  });
+}
+
 /* ---- Disbursement Voucher detail: print / approve / reject / cancel ---- */
 function dvDetailCardHtml(v) {
   const linesHtml = (v.accountTitleBreakdown && v.accountTitleBreakdown.length)
@@ -5729,7 +5544,8 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
         <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
         ${v.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.chequeNo)}</p></div>` : ''}
-        <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
+        <div><p class="text-xs text-muted uppercase">${v.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account'}</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
+        ${v.toBankAccountName ? `<div><p class="text-xs text-muted uppercase">Transfer To</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.toBankAccountName)}</p></div>` : ''}
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
         <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
         ${v.approvedBy ? `<div><p class="text-xs text-muted uppercase">Approved By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.approvedBy)} · ${formatDate(v.dateApproved)}</p></div>` : ''}
@@ -5944,6 +5760,11 @@ async function renderEditDisbursementVoucherPage(id) {
 
     if (!amount || amount <= 0 || !modeOfPayment || !purpose || !bankAccountId) {
       errBox.textContent = 'Please fill in all required fields.';
+      errBox.classList.remove('hidden');
+      return;
+    }
+    if (v.type === 'Fund Transfer' && bankAccountId === v.toBankAccountId) {
+      errBox.textContent = 'The source account must be different from the destination account.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -6528,7 +6349,7 @@ async function renderEncashmentSummaryPage() {
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">Encashment Summary</h1>
-      <p class="text-sm text-muted mt-1">Every processed encashment batch — cash advance releases and cash-fund payments.</p>
+      <p class="text-sm text-muted mt-1">Every processed encashment batch — cash advance releases, cash-fund payments and transfers.</p>
     </div>
     <div id="enc-summary-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
