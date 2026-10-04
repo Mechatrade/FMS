@@ -2511,6 +2511,8 @@ function wireModeBankFilter(accounts) {
   render(bankSel.value);
   modeSel.addEventListener('change', () => render(bankSel.value));
 }
+// Shown on a Cash Advance voucher until the approver chooses how it is paid and from which account.
+function fundingPlaceholderHtml() { return '<span class="font-normal text-muted">Assigned at approval</span>'; }
 // Cheque No. cell for voucher previews and the voucher itself. Until the approver enters it
 // at approval, a Cheque voucher shows that it is still to be assigned.
 function chequeNoCellHtml(d) {
@@ -5770,9 +5772,9 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted uppercase">Payee</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.payee)}</p></div>
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
         <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
-        <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
+        <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || (v.type === 'Cash Advance Release' ? fundingPlaceholderHtml() : '—')}</p></div>
         ${chequeNoCellHtml(v)}
-        <div><p class="text-xs text-muted uppercase">${v.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account'}</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
+        <div><p class="text-xs text-muted uppercase">${v.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account'}</p><p class="font-medium text-charcoal mt-0.5">${v.bankAccountName ? escapeAttr(v.bankAccountName) : (v.type === 'Cash Advance Release' ? fundingPlaceholderHtml() : '')}</p></div>
         ${v.toBankAccountName ? `<div><p class="text-xs text-muted uppercase">Transfer To</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.toBankAccountName)}</p></div>` : ''}
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
         <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.purpose)}</p></div>
@@ -5883,6 +5885,88 @@ function showChequeCorrectionPrompt(container, opts) {
     try { await opts.onConfirm(newNo, reason); } finally { btn.disabled = false; }
   });
 }
+// Shown to the approver of a Cash Advance, where funding is decided at approval:
+// how it is paid, and from which account.
+function showFundingPrompt(container, opts) {
+  const cls = 'w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+  const label = (b) => `${b.nickname}${b.bankName ? ' — ' + b.bankName : ''}`;
+  container.innerHTML = `
+    <div class="card p-4 max-w-2xl">
+      <p class="text-sm font-medium text-charcoal mb-1">Funding for this advance</p>
+      <p class="text-xs text-muted mb-3">Choose how it is paid and where the money comes from: Cash from a cash fund; Cheque, Debit Memo or Others from a bank account.</p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-medium text-charcoal mb-1">Mode of Payment <span class="text-red-500">*</span></label>
+          <select id="fund-mode" class="${cls}">${MODE_OF_PAYMENT_OPTIONS.map(o => `<option value="${o}">${o}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-charcoal mb-1">Account <span class="text-red-500">*</span></label>
+          <select id="fund-account" class="${cls}"></select>
+          <p id="fund-account-note" class="text-xs mt-1.5 text-muted"></p>
+        </div>
+        <div id="fund-cheque-wrap" class="hidden sm:col-span-2">
+          <label class="block text-xs font-medium text-charcoal mb-1">Cheque No. <span class="text-red-500">*</span></label>
+          <input id="fund-cheque" type="text" class="${cls}" />
+        </div>
+      </div>
+      <p id="fund-error" class="hidden text-xs text-red-600 mt-2"></p>
+      <div class="flex gap-3 mt-3">
+        <button type="button" id="fund-confirm" class="btn-glass-sm text-sm">Approve & Pay</button>
+        <button type="button" id="fund-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+      </div>
+    </div>`;
+  const modeSel = document.getElementById('fund-mode');
+  const acctSel = document.getElementById('fund-account');
+  const note = document.getElementById('fund-account-note');
+  const chequeWrap = document.getElementById('fund-cheque-wrap');
+  const updateNote = () => {
+    const acc = opts.accounts.find(b => b.id === acctSel.value);
+    if (!acc) {
+      const none = accountsForMode(opts.accounts, modeSel.value).length === 0;
+      note.className = `text-xs mt-1.5 ${none ? 'text-amber-700' : 'text-muted'}`;
+      note.textContent = !none ? '' : (modeSel.value === 'Cash'
+        ? 'No Cash fund available. Add one under Cash Management → Bank Accounts.'
+        : 'No bank account available. Add one under Cash Management → Bank Accounts.');
+      return;
+    }
+    if (acc.accountType === 'Cash') {
+      const bal = opts.balances[acc.id] || 0;
+      const enough = (Number(opts.amount) || 0) <= bal + 0.005;
+      note.className = `text-xs mt-1.5 ${enough ? 'text-muted' : 'text-red-600'}`;
+      note.textContent = `Available in ${acc.nickname}: ${formatCurrency(bal)}${enough ? '.' : ' — not enough for this advance. Top it up with a Fund Transfer first.'}`;
+    } else {
+      note.textContent = '';
+    }
+  };
+  const renderAccounts = () => {
+    const list = accountsForMode(opts.accounts, modeSel.value);
+    acctSel.innerHTML = '<option value="">Select...</option>' + list.map(b => `<option value="${b.id}">${escapeAttr(label(b))}</option>`).join('');
+    chequeWrap.classList.toggle('hidden', modeSel.value !== 'Cheque');
+    updateNote();
+  };
+  modeSel.addEventListener('change', renderAccounts);
+  acctSel.addEventListener('change', updateNote);
+  renderAccounts();
+  document.getElementById('fund-dismiss').addEventListener('click', () => { container.innerHTML = ''; });
+  document.getElementById('fund-confirm').addEventListener('click', async () => {
+    const errEl = document.getElementById('fund-error');
+    const btn = document.getElementById('fund-confirm');
+    const fail = (msg) => { errEl.textContent = msg; errEl.classList.remove('hidden'); btn.disabled = false; };
+    const modeOfPayment = modeSel.value;
+    const acc = opts.accounts.find(b => b.id === acctSel.value);
+    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('fund-cheque').value.trim() : '';
+    if (!acc) return fail('Choose the account this will be paid from.');
+    if (modeOfPayment === 'Cheque' && !chequeNo) return fail('Enter the Cheque No.');
+    btn.disabled = true;
+    const picked = { modeOfPayment, bankAccountId: acc.id, bankAccountName: label(acc), chequeNo };
+    if (opts.validate) {
+      const problem = await opts.validate(picked);
+      if (problem) return fail(problem);
+    }
+    errEl.classList.add('hidden');
+    try { await opts.onConfirm(picked); } finally { btn.disabled = false; }
+  });
+}
 function showVoucherNotePrompt(container, opts) {
   container.innerHTML = `
     <div class="card p-4 max-w-2xl">
@@ -5971,15 +6055,17 @@ async function renderDisbursementVoucherDetailPage(id) {
 
   const setBusy = (busy) => { actions.querySelectorAll('button').forEach(b => b.disabled = busy); };
 
-  const runApproval = async (chequeNo) => {
+  // funding is only passed for a Cash Advance, where the approver picks how it is paid and from which account
+  const runApproval = async (chequeNo, funding) => {
     setBusy(true);
     try {
-      const shortfall = await cashFundShortfallMessage(v, 'approve');
+      const pay = funding ? { ...v, ...funding } : v;
+      const shortfall = await cashFundShortfallMessage(pay, 'approve');
       if (shortfall) { errBox.textContent = shortfall; errBox.classList.remove('hidden'); setBusy(false); return; }
       const extra = chequeNo ? { chequeNo } : {};
       const datePaid = todayISO();
-      await executeDisbursementVoucher({ ...v, ...extra, id, datePaid });
-      await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, ...extra });
+      await executeDisbursementVoucher({ ...pay, ...extra, id, datePaid });
+      await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, ...(funding || {}), ...extra });
       refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
     } catch (e) {
@@ -5989,9 +6075,21 @@ async function renderDisbursementVoucherDetailPage(id) {
       setBusy(false);
     }
   };
-  document.getElementById('dv-approve-btn')?.addEventListener('click', () => {
+  document.getElementById('dv-approve-btn')?.addEventListener('click', async () => {
+    if (v.type === 'Cash Advance Release' && !v.bankAccountId) {
+      // A Cash Advance is requested without a funding source; the approver decides how it is paid.
+      let accounts = [], balances = {};
+      try {
+        accounts = await fetchActiveBankAccounts();
+        balances = await computeBankAccountBalances(accounts);
+      } catch (e) { console.error(e); }
+      showFundingPrompt(promptBox, {
+        accounts, balances, amount: v.amount,
+        validate: (f) => f.modeOfPayment === 'Cheque' ? chequeNoProblem(f.chequeNo, { ...v, bankAccountId: f.bankAccountId }, id, false) : null,
+        onConfirm: (f) => runApproval(f.chequeNo, { modeOfPayment: f.modeOfPayment, bankAccountId: f.bankAccountId, bankAccountName: f.bankAccountName }),
+      });
     // A cheque voucher can't be approved until the approver assigns the cheque number.
-    if (v.modeOfPayment === 'Cheque') {
+    } else if (v.modeOfPayment === 'Cheque') {
       showChequePrompt(promptBox, {
         initial: v.chequeNo || '',
         validate: (chequeNo) => chequeNoProblem(chequeNo, v, id, false),
@@ -6109,8 +6207,8 @@ async function renderEditDisbursementVoucherPage(id) {
       <div id="dv-edit-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: v.amount })}
-        ${modeOfPaymentFieldHtml(v.modeOfPayment, v.chequeNo)}
-        ${bankAccountSelectHtml(bankAccounts, v.bankAccountId, { required: true })}
+        ${v.type === 'Cash Advance Release' ? '' : `${modeOfPaymentFieldHtml(v.modeOfPayment, v.chequeNo)}
+        ${bankAccountSelectHtml(bankAccounts, v.bankAccountId, { required: true })}`}
         ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, required: true, value: v.purpose })}
       </div>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
@@ -6129,13 +6227,14 @@ async function renderEditDisbursementVoucherPage(id) {
     errBox.classList.add('hidden');
 
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
-    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
+    const fundingAtApproval = v.type === 'Cash Advance Release';   // the approver chooses the funding
+    const modeOfPayment = fundingAtApproval ? null : document.getElementById('field-modeOfPayment').value;
     const purpose = document.getElementById('field-dvPurpose').value.trim();
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel.value;
-    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
+    const bankSel = fundingAtApproval ? null : document.getElementById('field-bankAccountId');
+    const bankAccountId = bankSel ? bankSel.value : null;
+    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : null;
 
-    if (!amount || amount <= 0 || !modeOfPayment || !purpose || !bankAccountId) {
+    if (!amount || amount <= 0 || !purpose || (!fundingAtApproval && (!modeOfPayment || !bankAccountId))) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
@@ -6159,6 +6258,10 @@ async function renderEditDisbursementVoucherPage(id) {
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
       });
+      // keep the advance itself in step with the voucher, since liquidation clears the advance's amount
+      if (v.type === 'Cash Advance Release' && v.cashAdvanceId) {
+        await updateFinanceDoc('cashAdvances', v.cashAdvanceId, { amount });
+      }
       refreshApprovalsBadge();
       navigateTo('disbursement/vouchers/view/' + id);
     } catch (err) {
@@ -6195,18 +6298,6 @@ function unliquidatedAdvancesHtml(list) {
     </li>`;
   }).join('');
   return `<p class="font-medium">${escapeAttr(list[0].employeeName)} has ${list.length} unliquidated cash advance${list.length === 1 ? '' : 's'} (${formatCurrency(total)} in total):</p><ul class="mt-1">${rows}</ul>`;
-}
-// What the request form tells someone about the cash fund they picked: what it holds, what is already
-// waiting on it, and — if the advance doesn't fit — how much more the fund needs. (Requests can be
-// raised before the fund is topped up, so this is a heads-up; the hard check happens at approval.)
-function cashFundNote(name, balance, pending, amount) {
-  let text = `Available in ${name}: ${formatCurrency(balance)}`;
-  if (pending > 0) text += ` · already requested, awaiting approval: ${formatCurrency(pending)}`;
-  const short = pending + (Number(amount) || 0) - balance;
-  if (amount && short > 0.005) {
-    return { warn: true, text: `${text}. The fund needs ${formatCurrency(short)} more (via a Fund Transfer) before everything requested can be approved.` };
-  }
-  return { warn: false, text: text + '.' };
 }
 // A cash fund can't pay out more than it holds. Returns a message if paying this voucher would
 // overdraw its cash fund, otherwise null. Bank accounts are not checked.
@@ -6306,22 +6397,13 @@ async function renderCashAdvancesPage() {
 }
 async function renderNewCashAdvancePage() {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let bankAccounts = [], existingAdvances = [];
-  try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
+  let existingAdvances = [];
   try { existingAdvances = await fetchFinanceCollection('cashAdvances'); } catch (e) { console.error(e); }
-  // Cash fund balances, and what is already waiting on each fund (advance requests not yet approved)
-  let fundBalances = {}, pendingByAccount = {};
-  try { fundBalances = await computeBankAccountBalances(bankAccounts); } catch (e) { console.error(e); }
-  try {
-    (await fetchFinanceCollection('disbursementVouchers'))
-      .filter(x => x.type === 'Cash Advance Release' && x.status === 'Pending')
-      .forEach(x => { pendingByAccount[x.bankAccountId] = (pendingByAccount[x.bankAccountId] || 0) + (Number(x.amount) || 0); });
-  } catch (e) { console.error(e); }
 
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Cash Advance</h1>
-      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Once it is approved, the advance is released and becomes Outstanding. An advance paid from a cash fund can only be approved up to what the fund holds.</p>
+      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. The approver decides how it is paid and from which account; once it is approved, the advance is released and becomes Outstanding.</p>
     </div>
     <form id="ca-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="ca-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
@@ -6333,10 +6415,9 @@ async function renderNewCashAdvancePage() {
         ${selectField('caType', 'Type', CA_TYPES, { required: true, value: 'Personal/Operational' })}
         ${numberField('caAmount', 'Amount (₱)', { required: true, step: '0.01' })}
         ${dateField('caDate', 'Date Requested', { required: true, value: todayISO() })}
-        ${bankAccountSelectHtml(bankAccounts, null, { required: true })}
-        ${modeOfPaymentFieldHtml('Cash', '')}
         ${textareaField('caPurpose', 'Purpose', { span2: true, required: true })}
       </div>
+      <p class="text-xs text-muted">How this advance is paid — cash from a cash fund, or by cheque — is chosen by the approver.</p>
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
         <button id="ca-preview-btn" type="button" class="btn-primary">Preview</button>
         <a href="#/disbursement/cash-advances" class="text-sm text-muted hover:text-charcoal">Cancel</a>
@@ -6344,21 +6425,6 @@ async function renderNewCashAdvancePage() {
     </form>
     <div id="ca-preview-wrap" class="hidden"></div>`);
   refreshIcons();
-  wireModeOfPaymentToggle(bankAccounts);
-
-  const fundSelect = document.getElementById('field-bankAccountId');
-  const updateFundNote = () => {
-    let note = fundSelect.parentElement.querySelector('.fund-note');
-    if (!note) { note = document.createElement('p'); fundSelect.parentElement.appendChild(note); }
-    const acc = bankAccounts.find(b => b.id === fundSelect.value);
-    if (!acc || acc.accountType !== 'Cash') { note.className = 'fund-note hidden'; note.textContent = ''; return; }
-    const info = cashFundNote(acc.nickname, fundBalances[acc.id] || 0, pendingByAccount[acc.id] || 0, Number(document.getElementById('field-caAmount').value) || 0);
-    note.className = `fund-note text-xs mt-1.5 ${info.warn ? 'text-amber-700' : 'text-muted'}`;
-    note.textContent = info.text;
-  };
-  fundSelect.addEventListener('change', updateFundNote);
-  document.getElementById('field-caAmount').addEventListener('input', updateFundNote);
-  document.getElementById('field-modeOfPayment').addEventListener('change', updateFundNote);
 
   document.getElementById('field-caEmployeeName').addEventListener('blur', () => {
     const warnBox = document.getElementById('ca-employee-warning');
@@ -6376,12 +6442,8 @@ async function renderNewCashAdvancePage() {
     const amount = Number(document.getElementById('field-caAmount').value) || 0;
     const date = document.getElementById('field-caDate').value;
     const purpose = document.getElementById('field-caPurpose').value.trim();
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel.value;
-    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
-    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
 
-    if (!employeeName || !type || !amount || !date || !purpose || !bankAccountId || !modeOfPayment) {
+    if (!employeeName || !type || !amount || !date || !purpose) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
@@ -6389,7 +6451,7 @@ async function renderNewCashAdvancePage() {
 
     const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
     const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment };
+    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose };
 
     document.getElementById('ca-form').classList.add('hidden');
     const wrap = document.getElementById('ca-preview-wrap');
@@ -6403,8 +6465,7 @@ async function renderNewCashAdvancePage() {
           <div><p class="text-xs text-muted uppercase">Type</p><p class="font-medium text-charcoal mt-0.5">${draft.type}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
-          <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}${draft.modeOfPayment === 'Cheque' ? ' — Cheque No. assigned at approval' : ''}</p></div>
+          <div><p class="text-xs text-muted uppercase">Funding</p><p class="font-medium text-charcoal mt-0.5">${fundingPlaceholderHtml()}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
         ${voucherFooterHtml()}
@@ -6431,10 +6492,10 @@ async function renderNewCashAdvancePage() {
           number: draft.caNumber, employeeName: draft.employeeName, type: draft.type, purpose: draft.purpose,
           amount: draft.amount, dateRequested: draft.date, status: 'Pending Approval',
         });
+        // No funding source yet — the approver chooses how it is paid, and from which account.
         await createFinanceDoc('disbursementVouchers', {
           number: draft.dvNumber, type: 'Cash Advance Release', payee: draft.employeeName, amount: draft.amount,
-          purpose: draft.purpose, modeOfPayment: draft.modeOfPayment, bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
-          accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
+          purpose: draft.purpose, accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
           status: 'Pending',
         });
@@ -6449,6 +6510,7 @@ async function renderNewCashAdvancePage() {
     });
   });
 }
+
 async function renderCashAdvanceDetailPage(id) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let ca;
