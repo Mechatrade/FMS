@@ -267,13 +267,11 @@ const NAV = [
   },
   {
     name: "Disbursement", icon: "receipt-text", path: "disbursement",
-    description: "Disbursement vouchers, encashment batching, and cash advances.",
+    description: "Disbursement vouchers, cheques and cash advances.",
     children: [
       { name: "Disbursement Vouchers", path: "disbursement/vouchers", description: "Request and approve payment disbursements." },
       { name: "Cheques for Encashment", path: "disbursement/cheques", description: "Approved cheque payments subject for encashment." },
-      { name: "Encashment Batch", path: "disbursement/encashment-batch", description: "Group approved cash vouchers into one withdrawal." },
       { name: "Cash Advances", path: "disbursement/cash-advances", description: "Employee cash advance requests and liquidation." },
-      { name: "Encashment Summary", path: "disbursement/encashment-summary", description: "Report of processed encashment batches." },
     ]
   },
   {
@@ -1136,9 +1134,7 @@ function renderRoute() {
   const disbursementPages = {
     'disbursement/vouchers': renderDisbursementVouchersPage,
     'disbursement/cheques': renderChequesForEncashmentPage,
-    'disbursement/encashment-batch': renderEncashmentBatchPage,
     'disbursement/cash-advances': renderCashAdvancesPage,
-    'disbursement/encashment-summary': renderEncashmentSummaryPage,
   };
   if (disbursementPages[path]) {
     disbursementPages[path]();
@@ -4941,12 +4937,12 @@ async function renderCashForecastPage() {
 
 /* ==========================================================================
    DISBURSEMENT MODULE  (Firestore-backed: disbursementVouchers,
-   cashAdvances, encashmentBatches — Cash Funds reuse
+   cashAdvances — Cash Funds reuse
    bankAccounts with accountType 'Cash')
    ========================================================================== */
 const DV_TYPES = ['Regular Payment', 'Expense', 'Fund Transfer', 'Cash Advance Release'];
 // Retired voucher types: Petty Cash was removed from the system. Any old voucher of
-// these types stays visible for the record, but can't be approved, batched, paid or
+// these types stays visible for the record, but can't be approved, paid or
 // resubmitted — only cancelled (so nothing is left stuck).
 const RETIRED_DV_TYPES = ['Petty Cash Replenishment'];
 function isRetiredDVType(type) { return RETIRED_DV_TYPES.includes(type); }
@@ -4981,7 +4977,7 @@ function canApproveDisbursements(amount) {
   }
   return false;
 }
-const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'cashAdvances': 'CA', 'encashmentBatches': 'ENC' };
+const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'cashAdvances': 'CA' };
 async function getNumberingConfig(seriesKey, defaultPrefix) {
   let cfg;
   try {
@@ -5070,7 +5066,7 @@ function voucherFooterHtml() {
   return `<p class="text-center text-[10px] text-muted mt-6 pt-4 border-t border-borderc">${COMPANY_INFO.name} · ${COMPANY_INFO.website}</p>`;
 }
 
-/* ---- Payment execution (called on immediate-approve or batch-process) ---- */
+/* ---- Payment execution (called when a voucher is approved, or marked paid) ---- */
 async function executeRegularPaymentDV(dv) {
   const { sourceCollection, sourceId, amount, modeOfPayment, bankAccountId, bankAccountName, datePaid, number } = dv;
   if (sourceCollection === 'accountsPayable') {
@@ -5161,18 +5157,6 @@ async function executeDisbursementVoucher(dv) {
   // Never silently mark an unrecognised/retired voucher as paid without posting anything.
   throw new Error('Unsupported voucher type: ' + dv.type);
 }
-async function dvRequiresBatching(dv) {
-  if (dv.type === 'Cash Advance Release' || isRetiredDVType(dv.type)) return true;
-  // Regular Payment / Expense / Fund Transfer: batching only when physical cash is involved
-  // (a Cash-type account on either side).
-  const ids = [dv.bankAccountId, dv.toBankAccountId].filter(Boolean);
-  for (const accId of ids) {
-    const acc = await fetchFinanceDoc('bankAccounts', accId);
-    if (acc && acc.accountType === 'Cash') return true;
-  }
-  return false;
-}
-
 /* ---- Disbursement Vouchers: list ---- */
 function dvTableHtml(vouchers) {
   if (!vouchers.length) {
@@ -5227,7 +5211,7 @@ async function renderDisbursementVouchersPage() {
   }
 }
 
-/* ---- Cheques for Encashment: approved cheque payments waiting to be encashed by the payee ---- */
+/* ---- Cheques for Encashment: approved cheque payments, with where each one stands ---- */
 // Every Cheque voucher that has been approved (so it has a cheque number). A voucher that was never
 // approved, or was cancelled, has no cheque to encash and isn't listed.
 function selectEncashmentCheques(vouchers) {
@@ -5236,18 +5220,54 @@ function selectEncashmentCheques(vouchers) {
       && !(isRetiredDVType(v.type) && v.status !== 'Paid'))
     .sort((a, b) => String(b.dateApproved || '').localeCompare(String(a.dateApproved || '')));
 }
+// Cheque status (separate from the voucher's own status):
+//   Outstanding - approved and issued, not yet cleared or released
+//   Cleared     - deposited by the supplier into their own account
+//   Released    - encashed by MTISI itself
+const CHEQUE_STATUSES = ['Outstanding', 'Cleared', 'Released'];
+function chequeStatusOf(v) { return v.chequeStatus || 'Outstanding'; }
+function chequeStatusBadge(v) {
+  const s = chequeStatusOf(v);
+  const cls = { Outstanding: 'bg-amber-50 text-amber-700 border-amber-200', Cleared: 'bg-teal-50 text-teal-700 border-teal-200', Released: 'bg-blue-50 text-blue-700 border-blue-200' }[s];
+  const date = s !== 'Outstanding' && v.chequeStatusDate ? `<p class="text-xs text-muted mt-1">${formatDate(v.chequeStatusDate)}</p>` : '';
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}">${s}</span>${date}`;
+}
+function summarizeCheques(rows) {
+  const out = { count: rows.length, total: 0 };
+  CHEQUE_STATUSES.forEach(s => { out[s] = { count: 0, sum: 0 }; });
+  rows.forEach(v => {
+    const amt = Number(v.amount) || 0;
+    const s = chequeStatusOf(v);
+    out.total += amt; out[s].count += 1; out[s].sum += amt;
+  });
+  return out;
+}
+function chequeStatusChangeProblem(status, date, v, today) {
+  if (status === 'Outstanding') return null;
+  if (!date) return 'Enter the date.';
+  if (date > today) return "The date can't be in the future.";
+  if (v.dateApproved && date < v.dateApproved) return `The date can't be before the approval date (${formatDate(v.dateApproved)}).`;
+  return null;
+}
 async function renderChequesForEncashmentPage() {
+  // Marking a cheque is a finance action; everyone with Disbursement access can still see the list.
+  const canUpdate = canApproveDisbursements();
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">Cheques for Encashment</h1>
-      <p class="text-sm text-muted mt-1">Approved cheque payments — the cheques subject for encashment by the payee. This is separate from Encashment Batch, which groups cash withdrawals.</p>
+      <p class="text-sm text-muted mt-1">Approved cheque payments. A cheque stays <span class="font-medium">Outstanding</span> until it is marked <span class="font-medium">Cleared</span> (deposited by the supplier) or <span class="font-medium">Released</span> (encashed by MTISI).</p>
     </div>
     <div class="flex flex-wrap gap-3 mb-4">
       <input id="chq-search" type="text" placeholder="Search cheque no., payee or DV #..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="chq-status" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Cheque Statuses</option>
+        ${CHEQUE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}
+      </select>
       <select id="chq-bank" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
         <option value="">All Bank Accounts</option>
       </select>
     </div>
+    <div id="chq-prompt"></div>
     <div id="chq-summary" class="text-sm text-muted mb-3"></div>
     <div id="chq-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
@@ -5266,21 +5286,92 @@ async function renderChequesForEncashmentPage() {
   document.getElementById('chq-bank').insertAdjacentHTML('beforeend',
     Object.entries(banks).map(([id, name]) => `<option value="${id}">${escapeAttr(name)}</option>`).join(''));
 
+  const openStatusPanel = (v) => {
+    const inputCls = 'w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+    const current = chequeStatusOf(v);
+    const panel = document.getElementById('chq-prompt');
+    panel.innerHTML = `
+      <div class="card p-4 max-w-2xl mb-4">
+        <p class="text-sm font-medium text-charcoal mb-1">Update Cheque Status</p>
+        <p class="text-xs text-muted mb-3">Cheque <span class="font-medium text-charcoal">${escapeAttr(v.chequeNo)}</span> · ${escapeAttr(v.payee) || '—'} · ${formatCurrency(v.amount)}</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-charcoal mb-1">Cheque Status</label>
+            <select id="chq-new-status" class="${inputCls}">
+              <option value="Outstanding" ${current === 'Outstanding' ? 'selected' : ''}>Outstanding</option>
+              <option value="Cleared" ${current === 'Cleared' ? 'selected' : ''}>Cleared — deposited by the supplier</option>
+              <option value="Released" ${current === 'Released' ? 'selected' : ''}>Released — encashed by MTISI</option>
+            </select>
+          </div>
+          <div id="chq-date-wrap" class="${current === 'Outstanding' ? 'hidden' : ''}">
+            <label id="chq-date-label" class="block text-xs font-medium text-charcoal mb-1">Date</label>
+            <input id="chq-new-date" type="date" value="${v.chequeStatusDate || todayISO()}" ${v.dateApproved ? `min="${v.dateApproved}"` : ''} max="${todayISO()}" class="${inputCls}" />
+          </div>
+        </div>
+        <p id="chq-panel-error" class="hidden text-xs text-red-600 mt-2"></p>
+        <div class="flex gap-3 mt-3">
+          <button type="button" id="chq-panel-save" class="btn-glass-sm text-sm">Save</button>
+          <button type="button" id="chq-panel-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+        </div>
+      </div>`;
+    const statusSel = document.getElementById('chq-new-status');
+    const dateWrap = document.getElementById('chq-date-wrap');
+    const dateLabel = document.getElementById('chq-date-label');
+    const syncDateField = () => {
+      dateWrap.classList.toggle('hidden', statusSel.value === 'Outstanding');
+      dateLabel.textContent = statusSel.value === 'Cleared' ? 'Date Cleared' : statusSel.value === 'Released' ? 'Date Released' : 'Date';
+    };
+    syncDateField();
+    statusSel.addEventListener('change', syncDateField);
+    document.getElementById('chq-panel-dismiss').addEventListener('click', () => { panel.innerHTML = ''; });
+    document.getElementById('chq-panel-save').addEventListener('click', async () => {
+      const errEl = document.getElementById('chq-panel-error');
+      const btn = document.getElementById('chq-panel-save');
+      const status = statusSel.value;
+      const date = document.getElementById('chq-new-date').value;
+      const problem = chequeStatusChangeProblem(status, date, v, todayISO());
+      if (problem) { errEl.textContent = problem; errEl.classList.remove('hidden'); return; }
+      errEl.classList.add('hidden');
+      btn.disabled = true;
+      try {
+        const patch = {
+          chequeStatus: status,
+          chequeStatusDate: status === 'Outstanding' ? null : date,
+          chequeStatusBy: currentUser ? currentUser.email : null,
+        };
+        await updateFinanceDoc('disbursementVouchers', v.id, patch);
+        Object.assign(v, patch);
+        panel.innerHTML = '';
+        renderFiltered();
+      } catch (err) {
+        console.error(err);
+        errEl.textContent = 'Could not save this change. Please try again.';
+        errEl.classList.remove('hidden');
+        btn.disabled = false;
+      }
+    });
+  };
+
   const renderFiltered = () => {
     const q = document.getElementById('chq-search').value.trim().toLowerCase();
     const bank = document.getElementById('chq-bank').value;
+    const status = document.getElementById('chq-status').value;
     const rows = cheques.filter(v =>
       (!bank || v.bankAccountId === bank) &&
+      (!status || chequeStatusOf(v) === status) &&
       (!q || [v.chequeNo, v.payee, v.number].some(x => String(x || '').toLowerCase().includes(q))));
-    const total = rows.reduce((s, v) => s + (Number(v.amount) || 0), 0);
-    document.getElementById('chq-summary').innerHTML = rows.length
-      ? `${rows.length} cheque${rows.length === 1 ? '' : 's'} · Total <span class="font-medium text-charcoal">${formatCurrency(total)}</span>`
-      : '';
+    const sm = summarizeCheques(rows);
+    document.getElementById('chq-summary').innerHTML = rows.length ? `
+      <span>${sm.count} cheque${sm.count === 1 ? '' : 's'} · Total <span class="font-medium text-charcoal">${formatCurrency(sm.total)}</span></span>
+      <span class="mx-2">|</span>
+      <span class="text-amber-700">Outstanding ${formatCurrency(sm.Outstanding.sum)} (${sm.Outstanding.count})</span>
+      <span class="mx-2">·</span><span class="text-teal-700">Cleared ${formatCurrency(sm.Cleared.sum)} (${sm.Cleared.count})</span>
+      <span class="mx-2">·</span><span class="text-blue-700">Released ${formatCurrency(sm.Released.sum)} (${sm.Released.count})</span>` : '';
     document.getElementById('chq-container').innerHTML = rows.length ? `
       <div class="card overflow-x-auto">
         <table class="w-full text-sm">
           <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">Cheque No.</th><th class="px-4 py-3">DV #</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Bank Account</th><th class="px-4 py-3">Date Approved</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+            <th class="px-4 py-3">Cheque No.</th><th class="px-4 py-3">DV #</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Bank Account</th><th class="px-4 py-3">Date Approved</th><th class="px-4 py-3">Voucher Status</th><th class="px-4 py-3">Cheque Status</th><th class="px-4 py-3 text-right">Actions</th>
           </tr></thead>
           <tbody>
             ${rows.map(v => `
@@ -5292,17 +5383,24 @@ async function renderChequesForEncashmentPage() {
                 <td class="px-4 py-3">${escapeAttr(v.bankAccountName) || '—'}</td>
                 <td class="px-4 py-3">${formatDate(v.dateApproved)}</td>
                 <td class="px-4 py-3">${dvStatusBadge(v.status)}</td>
-                <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="btn-glass-sm">View</a></td>
+                <td class="px-4 py-3">${chequeStatusBadge(v)}</td>
+                <td class="px-4 py-3 text-right">
+                  ${canUpdate ? `<button type="button" class="btn-glass-sm chq-update-btn" data-id="${v.id}">Update Status</button> ` : ''}
+                  <a href="#/disbursement/vouchers/view/${v.id}" class="btn-glass-sm">View</a>
+                </td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>` : `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
-        <p class="text-sm text-muted">${cheques.length ? 'No cheques match your search.' : 'No approved cheque payments yet.'}</p>
+        <p class="text-sm text-muted">${cheques.length ? 'No cheques match your filters.' : 'No approved cheque payments yet.'}</p>
       </div>`;
+    document.querySelectorAll('.chq-update-btn').forEach(b =>
+      b.addEventListener('click', () => openStatusPanel(cheques.find(c => c.id === b.dataset.id))));
     refreshIcons();
   };
   renderFiltered();
   document.getElementById('chq-search').addEventListener('input', renderFiltered);
+  document.getElementById('chq-status').addEventListener('change', renderFiltered);
   document.getElementById('chq-bank').addEventListener('change', renderFiltered);
 }
 
@@ -5436,8 +5534,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
       perr.classList.add('hidden');
       btn.disabled = true; btn.innerHTML = spinnerHtml();
       try {
-        const requiresBatchingGuess = bankAccounts.find(b => b.id === bankAccountId)?.accountType === 'Cash';
-        await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: requiresBatchingGuess });
+        await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending' });
         refreshApprovalsBadge();
         navigateTo('disbursement/vouchers');
       } catch (err) {
@@ -5451,7 +5548,6 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
 }
 
 /* ---- Direct vouchers: Expense + Fund Transfer (entered here — every cash-out has a voucher) ---- */
-function isCashAccount(accounts, id) { return accounts.find(b => b.id === id)?.accountType === 'Cash'; }
 function dvRequestPreviewHtml(d) {
   const cell = (label, value, wide) => `<div class="${wide ? 'col-span-2' : ''}"><p class="text-xs text-muted uppercase">${label}</p><p class="font-medium text-charcoal mt-0.5">${value}</p></div>`;
   return `
@@ -5481,7 +5577,7 @@ function dvRequestPreviewHtml(d) {
       <button type="button" id="dv-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
     </div>`;
 }
-function showDvRequestPreview(draft, formId, wrapId, requiresBatching) {
+function showDvRequestPreview(draft, formId, wrapId) {
   document.getElementById(formId).classList.add('hidden');
   const wrap = document.getElementById(wrapId);
   wrap.classList.remove('hidden');
@@ -5498,7 +5594,7 @@ function showDvRequestPreview(draft, formId, wrapId, requiresBatching) {
     perr.classList.add('hidden');
     btn.disabled = true; btn.innerHTML = spinnerHtml();
     try {
-      await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching });
+      await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending' });
       refreshApprovalsBadge();
       navigateTo('disbursement/vouchers');
     } catch (err) {
@@ -5563,7 +5659,7 @@ async function renderNewExpenseVoucherPage() {
       bankAccountId, bankAccountName, accountTitle: category,
       requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
-    showDvRequestPreview(draft, 'dv-exp-form', 'dv-exp-preview-wrap', isCashAccount(bankAccounts, bankAccountId));
+    showDvRequestPreview(draft, 'dv-exp-form', 'dv-exp-preview-wrap');
   });
 }
 async function renderNewFundTransferPage() {
@@ -5640,7 +5736,7 @@ async function renderNewFundTransferPage() {
       bankAccountId: fromId, bankAccountName: fromName, toBankAccountId: toId, toBankAccountName: toName,
       accountTitle: toName, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
-    showDvRequestPreview(draft, 'dv-tr-form', 'dv-tr-preview-wrap', isCashAccount(accounts, fromId) || isCashAccount(accounts, toId));
+    showDvRequestPreview(draft, 'dv-tr-form', 'dv-tr-preview-wrap');
   });
 }
 
@@ -5831,9 +5927,13 @@ async function renderDisbursementVoucherDetailPage(id) {
   if (!retired && v.status === 'Pending' && canApproveDisbursements(v.amount)) {
     buttons.push(`<button type="button" id="dv-approve-btn" class="btn-glass-sm text-sm">Approve</button>`);
   }
-  // A retired-type voucher can be cancelled even once Approved, so none are left stuck in the batch queue.
+  // A retired-type voucher can be cancelled even once Approved, so none are left stuck.
   if ((v.status === 'Pending' || (retired && v.status === 'Approved')) && (canApproveDisbursements() || isRequester)) {
     buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Cancel</button>`);
+  }
+  // Vouchers approved back when payments waited for an encashment batch are paid with one click.
+  if (!retired && v.status === 'Approved' && canApproveDisbursements(v.amount)) {
+    buttons.push(`<button type="button" id="dv-markpaid-btn" class="btn-glass-sm text-sm">Mark as Paid</button>`);
   }
   if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled')) {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
@@ -5847,6 +5947,8 @@ async function renderDisbursementVoucherDetailPage(id) {
     promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">This amount is above your approval limit — a System Admin needs to approve it.</p>`;
   } else if (retired && (v.status === 'Pending' || v.status === 'Approved')) {
     promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">Petty Cash is no longer used in this system. This voucher is kept for the record and can only be cancelled.</p>`;
+  } else if (!retired && v.status === 'Approved' && canApproveDisbursements(v.amount)) {
+    promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">This voucher was approved while payments still waited for an encashment batch. Mark it as paid to post it.</p>`;
   }
   refreshIcons();
 
@@ -5856,14 +5958,9 @@ async function renderDisbursementVoucherDetailPage(id) {
     setBusy(true);
     try {
       const extra = chequeNo ? { chequeNo } : {};
-      const requiresBatching = await dvRequiresBatching(v);
-      if (requiresBatching) {
-        await updateFinanceDoc('disbursementVouchers', id, { status: 'Approved', approvedBy: currentUser.email, dateApproved: todayISO(), requiresBatching: true, ...extra });
-      } else {
-        const datePaid = todayISO();
-        await executeDisbursementVoucher({ ...v, ...extra, id, datePaid });
-        await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, requiresBatching: false, ...extra });
-      }
+      const datePaid = todayISO();
+      await executeDisbursementVoucher({ ...v, ...extra, id, datePaid });
+      await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, ...extra });
       refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
     } catch (e) {
@@ -5883,6 +5980,22 @@ async function renderDisbursementVoucherDetailPage(id) {
       });
     } else {
       runApproval(null);
+    }
+  });
+
+  document.getElementById('dv-markpaid-btn')?.addEventListener('click', async () => {
+    setBusy(true);
+    try {
+      const datePaid = todayISO();
+      await executeDisbursementVoucher({ ...v, id, datePaid });
+      await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', datePaid });
+      refreshApprovalsBadge();
+      renderDisbursementVoucherDetailPage(id);
+    } catch (e) {
+      console.error(e);
+      errBox.textContent = 'Could not mark this voucher as paid. Please try again.';
+      errBox.classList.remove('hidden');
+      setBusy(false);
     }
   });
 
@@ -6036,119 +6149,6 @@ async function renderEditDisbursementVoucherPage(id) {
   });
 }
 
-/* ---- Encashment Batch ---- */
-async function renderEncashmentBatchPage() {
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Encashment Batch</h1>
-      <p class="text-sm text-muted mt-1">Approved vouchers awaiting a cash withdrawal. Select the ones being encashed together, then process the batch.</p>
-    </div>
-    <div id="batch-list-container" class="text-sm text-muted">Loading...</div>`);
-  refreshIcons();
-  try {
-    const all = await fetchFinanceCollection('disbursementVouchers');
-    const pending = all.filter(v => v.status === 'Approved' && !isRetiredDVType(v.type));
-    if (!pending.length) {
-      document.getElementById('batch-list-container').innerHTML = `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">Nothing waiting for encashment right now.</div>`;
-      return;
-    }
-    document.getElementById('batch-list-container').innerHTML = `
-      <form id="batch-form" class="space-y-4">
-        <div id="batch-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-        <div class="card overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-              <th class="px-4 py-3"><input type="checkbox" id="batch-select-all" /></th>
-              <th class="px-4 py-3">DV #</th><th class="px-4 py-3">Type</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Source</th><th class="px-4 py-3 text-right">Amount</th>
-            </tr></thead>
-            <tbody>
-              ${pending.map(v => `
-                <tr class="border-b border-borderc last:border-0">
-                  <td class="px-4 py-3"><input type="checkbox" class="batch-item" value="${v.id}" data-amount="${v.amount}" /></td>
-                  <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
-                  <td class="px-4 py-3">${v.type}</td>
-                  <td class="px-4 py-3">${v.payee || '—'}</td>
-                  <td class="px-4 py-3">${v.bankAccountName || '—'}</td>
-                  <td class="px-4 py-3 text-right">${formatCurrency(v.amount)}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="card p-5 max-w-md">
-          <p class="text-sm text-charcoal">Selected total: <span id="batch-total" class="font-semibold text-forest">₱ 0.00</span> (<span id="batch-count">0</span> voucher(s))</p>
-          <div class="mt-3">
-            ${dateField('batchDate', 'Encashment Date', { required: true, value: todayISO() })}
-          </div>
-          <button type="submit" id="batch-submit" class="btn-primary text-sm mt-4"><span id="batch-submit-text">Process Batch</span></button>
-        </div>
-      </form>`;
-    refreshIcons();
-
-    const checkboxes = () => Array.from(document.querySelectorAll('.batch-item'));
-    const updateTotals = () => {
-      const checked = checkboxes().filter(c => c.checked);
-      const total = checked.reduce((s, c) => s + Number(c.getAttribute('data-amount') || 0), 0);
-      document.getElementById('batch-total').textContent = formatCurrency(total);
-      document.getElementById('batch-count').textContent = checked.length;
-    };
-    document.getElementById('batch-select-all').addEventListener('change', (e) => {
-      checkboxes().forEach(c => { c.checked = e.target.checked; });
-      updateTotals();
-    });
-    checkboxes().forEach(c => c.addEventListener('change', updateTotals));
-
-    document.getElementById('batch-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = document.getElementById('batch-submit');
-      const btnText = document.getElementById('batch-submit-text');
-      const errBox = document.getElementById('batch-form-error');
-      errBox.classList.add('hidden');
-      const selectedIds = checkboxes().filter(c => c.checked).map(c => c.value);
-      const batchDate = document.getElementById('field-batchDate').value;
-
-      if (!selectedIds.length) {
-        errBox.textContent = 'Select at least one voucher to encash.';
-        errBox.classList.remove('hidden');
-        return;
-      }
-      if (!batchDate) {
-        errBox.textContent = 'Enter the encashment date.';
-        errBox.classList.remove('hidden');
-        return;
-      }
-
-      btn.disabled = true; btnText.innerHTML = spinnerHtml();
-      try {
-        const selectedVouchers = pending.filter(v => selectedIds.includes(v.id));
-        const totalAmount = selectedVouchers.reduce((s, v) => s + (Number(v.amount) || 0), 0);
-        const batchNumber = await generateSeriesNumber('encashmentBatches', 'ENC', 'number');
-        const batchRef = await createFinanceDoc('encashmentBatches', {
-          number: batchNumber, batchDate,
-          voucherRefs: selectedVouchers.map(v => ({
-            id: v.id, type: v.type, number: v.number, amount: v.amount,
-            accountTitleBreakdown: v.accountTitleBreakdown || [{ account: v.accountTitle, amount: v.amount }],
-          })),
-          totalAmount, processedBy: currentUser.email, status: 'Processed',
-        });
-        for (const v of selectedVouchers) {
-          await executeDisbursementVoucher({ ...v, datePaid: batchDate, batchId: batchRef.id, batchNumber });
-          await updateFinanceDoc('disbursementVouchers', v.id, { status: 'Paid', datePaid: batchDate, batchId: batchRef.id, batchNumber });
-        }
-        refreshApprovalsBadge();
-        navigateTo('disbursement/encashment-summary');
-      } catch (err) {
-        console.error(err);
-        errBox.textContent = 'Could not process this batch. Please try again.';
-        errBox.classList.remove('hidden');
-        btn.disabled = false; btnText.textContent = 'Process Batch';
-      }
-    });
-  } catch (e) {
-    console.error(e);
-    document.getElementById('batch-list-container').innerHTML = poLoadErrorHtml();
-  }
-}
-
 /* ---- Cash Advances ---- */
 function isCAOverdue(ca) {
   if (ca.status !== 'Outstanding' || !ca.dateReleased) return false;
@@ -6225,7 +6225,7 @@ async function renderNewCashAdvancePage() {
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Cash Advance</h1>
-      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Always goes through Encashment Batching once approved.</p>
+      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Once it is approved, the advance is released and becomes Outstanding.</p>
     </div>
     <form id="ca-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="ca-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
@@ -6334,7 +6334,7 @@ async function renderNewCashAdvancePage() {
           purpose: draft.purpose, modeOfPayment: draft.modeOfPayment, bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
           accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
-          status: 'Pending', requiresBatching: true,
+          status: 'Pending',
         });
         refreshApprovalsBadge();
         navigateTo('disbursement/cash-advances');
@@ -6576,49 +6576,6 @@ async function renderCashAdvanceLiquidationPage(id) {
   });
 }
 
-/* ---- Encashment Summary ---- */
-async function renderEncashmentSummaryPage() {
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Encashment Summary</h1>
-      <p class="text-sm text-muted mt-1">Every processed encashment batch — cash advance releases, cash-fund payments and transfers.</p>
-    </div>
-    <div id="enc-summary-container" class="text-sm text-muted">Loading...</div>`);
-  refreshIcons();
-  try {
-    const batches = await fetchFinanceCollection('encashmentBatches');
-    if (!batches.length) {
-      document.getElementById('enc-summary-container').innerHTML = `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">No batches processed yet.</div>`;
-      return;
-    }
-    const grandTotal = batches.reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
-    document.getElementById('enc-summary-container').innerHTML = `
-      <p class="text-sm text-muted mb-3">Showing ${batches.length} batch(es) · Total encashed: <span class="font-medium text-charcoal">${formatCurrency(grandTotal)}</span></p>
-      <div class="space-y-3">
-        ${batches.map(b => `
-          <div class="card p-4">
-            <div class="flex items-center justify-between mb-2">
-              <p class="text-sm font-medium text-charcoal">${b.number}</p>
-              <p class="text-xs text-muted">${formatDate(b.batchDate)} · ${formatCurrency(b.totalAmount)}</p>
-            </div>
-            <table class="w-full text-xs">
-              <tbody>
-                ${(b.voucherRefs || []).map(v => `
-                  <tr class="border-t border-borderc">
-                    <td class="py-1.5 text-charcoal">${v.number} — ${v.type}</td>
-                    <td class="py-1.5 text-right w-28 align-top">${formatCurrency(v.amount)}</td>
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>`).join('')}
-      </div>`;
-    refreshIcons();
-  } catch (e) {
-    console.error(e);
-    document.getElementById('enc-summary-container').innerHTML = poLoadErrorHtml();
-  }
-}
-
 /* ---- Approvals — central inbox for everything pending approval ---- */
 async function renderApprovalsPage() {
   if (!canApproveDisbursements()) {
@@ -6834,7 +6791,6 @@ async function renderActivityLogPage() {
 const NUMBERING_SERIES_DEFAULTS = [
   { key: 'DV', label: 'Disbursement Vouchers', defaultPrefix: 'DV' },
   { key: 'CA', label: 'Cash Advances', defaultPrefix: 'CA' },
-  { key: 'ENC', label: 'Encashment Batches', defaultPrefix: 'ENC' },
 ];
 async function renderNumberingSettingsPage() {
   contentWrap(`
