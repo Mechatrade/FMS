@@ -2439,7 +2439,7 @@ const CASH_OFFSET_ACCOUNTS = ["Owner's Capital", "Owner's Drawings", 'Other Inco
 const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
 const MODE_OF_PAYMENT_OPTIONS = ['Cash', 'Cheque', 'Debit Memo', 'Others'];
-function modeOfPaymentFieldHtml(selectedMode, chequeNo) {
+function modeOfPaymentFieldHtml(selectedMode) {
   return `
     <div>
       <label class="block text-sm font-medium text-charcoal mb-1.5">Mode of Payment <span class="text-red-500">*</span></label>
@@ -2448,8 +2448,9 @@ function modeOfPaymentFieldHtml(selectedMode, chequeNo) {
       </select>
     </div>
     <div id="mop-cheque-wrap" class="${selectedMode === 'Cheque' ? '' : 'hidden'}">
-      <label class="block text-sm font-medium text-charcoal mb-1.5">Cheque No. <span class="text-red-500">*</span></label>
-      <input id="field-chequeNo" type="text" value="${escapeAttr(chequeNo)}" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <div class="h-full flex items-end">
+        <p class="text-xs text-muted pb-3">The Cheque No. is entered by the approver when this request is approved.</p>
+      </div>
     </div>`;
 }
 // Mode of Payment decides which accounts can be used:
@@ -2494,6 +2495,13 @@ function wireModeBankFilter(accounts) {
   };
   render(bankSel.value);
   modeSel.addEventListener('change', () => render(bankSel.value));
+}
+// Cheque No. cell for voucher previews and the voucher itself. Until the approver enters it
+// at approval, a Cheque voucher shows that it is still to be assigned.
+function chequeNoCellHtml(d) {
+  if (d.modeOfPayment !== 'Cheque') return '';
+  const value = d.chequeNo ? escapeAttr(d.chequeNo) : '<span class="font-normal text-muted">Assigned at approval</span>';
+  return `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${value}</p></div>`;
 }
 function wireModeOfPaymentToggle(accounts) {
   const sel = document.getElementById('field-modeOfPayment');
@@ -5069,7 +5077,7 @@ async function executeRegularPaymentDV(dv) {
     const newBalance = Number((ap.amount - newAmountPaid).toFixed(2));
     const newStatus = newBalance <= 0.01 ? 'Paid' : (newAmountPaid > 0 ? 'Partially Paid' : 'Unpaid');
     const payments = Array.isArray(ap.payments) ? [...ap.payments] : [];
-    payments.push({ date: datePaid, amount, method: modeOfPayment, notes: `DV ${number}`, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
+    payments.push({ date: datePaid, amount, method: modeOfPayment, notes: `DV ${number}${dv.chequeNo ? ' — Cheque ' + dv.chequeNo : ''}`, bankAccountId, bankAccountName, recordedBy: currentUser ? currentUser.email : null });
     await updateFinanceDoc('accountsPayable', sourceId, { amountPaid: newAmountPaid, balance: newBalance, status: newStatus, payments });
     await postGLEntries([
       { date: datePaid, account: 'Accounts Payable', debit: amount, credit: 0, description: `Payment made — ${ap.payee} (DV ${number})`, sourceType: 'ap-payment', sourceId },
@@ -5283,7 +5291,6 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
     const date = document.getElementById('field-dvDate').value;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const purpose = document.getElementById('field-dvPurpose').value.trim();
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
@@ -5291,11 +5298,6 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
 
     if (!amount || amount <= 0 || !date || !bankAccountId) {
       errBox.textContent = 'Please fill in all required fields.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
       errBox.classList.remove('hidden');
       return;
     }
@@ -5308,7 +5310,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
     const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
     const draft = {
       number: previewNumber, type: 'Regular Payment', payee, amount, purpose,
-      modeOfPayment, chequeNo, bankAccountId, bankAccountName, accountTitle,
+      modeOfPayment, bankAccountId, bankAccountName, accountTitle,
       sourceCollection, sourceId, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
 
@@ -5324,7 +5326,7 @@ async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
           <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
-          ${draft.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.chequeNo)}</p></div>` : ''}
+          ${chequeNoCellHtml(draft)}
           <div><p class="text-xs text-muted uppercase">Bank/Cash Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
           <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
@@ -5380,7 +5382,7 @@ function dvRequestPreviewHtml(d) {
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(d.amount)}</p></div>
         ${cell('Account Title', escapeAttr(d.accountTitle))}
         ${cell('Mode of Payment', escapeAttr(d.modeOfPayment))}
-        ${d.chequeNo ? cell('Cheque No.', escapeAttr(d.chequeNo)) : ''}
+        ${chequeNoCellHtml(d)}
         ${cell(d.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account', escapeAttr(d.bankAccountName))}
         ${d.toBankAccountName ? cell('Transfer To', escapeAttr(d.toBankAccountName)) : ''}
         ${cell('Requested By', escapeAttr(d.requestedBy))}
@@ -5464,7 +5466,6 @@ async function renderNewExpenseVoucherPage() {
     const amount = Number(document.getElementById('field-expAmount').value) || 0;
     const date = document.getElementById('field-expDate').value;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
     const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
@@ -5475,14 +5476,9 @@ async function renderNewExpenseVoucherPage() {
       errBox.classList.remove('hidden');
       return;
     }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
-      errBox.classList.remove('hidden');
-      return;
-    }
     const number = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
     const draft = {
-      number, type: 'Expense', payee, amount, purpose, modeOfPayment, chequeNo,
+      number, type: 'Expense', payee, amount, purpose, modeOfPayment,
       bankAccountId, bankAccountName, accountTitle: category,
       requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
@@ -5545,7 +5541,6 @@ async function renderNewFundTransferPage() {
     const amount = Number(document.getElementById('field-trAmount').value) || 0;
     const date = document.getElementById('field-trDate').value;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const purpose = document.getElementById('field-trPurpose').value.trim() || `Fund transfer — ${fromName} to ${toName}`;
 
     if (!fromId || !toId || !amount || amount <= 0 || !date) {
@@ -5558,14 +5553,9 @@ async function renderNewFundTransferPage() {
       errBox.classList.remove('hidden');
       return;
     }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
-      errBox.classList.remove('hidden');
-      return;
-    }
     const number = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
     const draft = {
-      number, type: 'Fund Transfer', payee: toName, amount, purpose, modeOfPayment, chequeNo,
+      number, type: 'Fund Transfer', payee: toName, amount, purpose, modeOfPayment,
       bankAccountId: fromId, bankAccountName: fromName, toBankAccountId: toId, toBankAccountName: toName,
       accountTitle: toName, requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
     };
@@ -5587,7 +5577,7 @@ function dvDetailCardHtml(v) {
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(v.amount)}</p></div>
         <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.accountTitle)}</p></div>
         <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${v.modeOfPayment || '—'}</p></div>
-        ${v.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.chequeNo)}</p></div>` : ''}
+        ${chequeNoCellHtml(v)}
         <div><p class="text-xs text-muted uppercase">${v.type === 'Fund Transfer' ? 'Transfer From' : 'Bank/Cash Account'}</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.bankAccountName)}</p></div>
         ${v.toBankAccountName ? `<div><p class="text-xs text-muted uppercase">Transfer To</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.toBankAccountName)}</p></div>` : ''}
         <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(v.requestedBy)}</p></div>
@@ -5607,6 +5597,97 @@ function dvDetailCardHtml(v) {
       </div>
       ${voucherFooterHtml()}
     </div>`;
+}
+// Shown to the approver when a Cheque voucher is approved: the cheque number is assigned here.
+function showChequePrompt(container, opts) {
+  container.innerHTML = `
+    <div class="card p-4 max-w-2xl">
+      <label class="block text-sm font-medium text-charcoal mb-1">Cheque No. <span class="text-red-500">*</span></label>
+      <p class="text-xs text-muted mb-2">This voucher is paid by cheque. Enter the cheque number being issued to approve it.</p>
+      <input id="voucher-cheque-input" type="text" value="${escapeAttr(opts.initial)}" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <p id="voucher-cheque-error" class="hidden text-xs text-red-600 mt-1">Enter the Cheque No.</p>
+      <div class="flex gap-3 mt-3">
+        <button type="button" id="voucher-cheque-confirm" class="btn-glass-sm text-sm">Approve with this Cheque No.</button>
+        <button type="button" id="voucher-cheque-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+      </div>
+    </div>`;
+  document.getElementById('voucher-cheque-input').focus();
+  document.getElementById('voucher-cheque-dismiss').addEventListener('click', () => { container.innerHTML = ''; });
+  document.getElementById('voucher-cheque-confirm').addEventListener('click', async () => {
+    const errEl = document.getElementById('voucher-cheque-error');
+    const confirmBtn = document.getElementById('voucher-cheque-confirm');
+    const chequeNo = document.getElementById('voucher-cheque-input').value.trim();
+    const fail = (msg) => { errEl.textContent = msg; errEl.classList.remove('hidden'); confirmBtn.disabled = false; };
+    if (!chequeNo) return fail('Enter the Cheque No.');
+    confirmBtn.disabled = true;
+    if (opts.validate) {
+      const problem = await opts.validate(chequeNo);
+      if (problem) return fail(problem);
+    }
+    errEl.classList.add('hidden');
+    try { await opts.onConfirm(chequeNo); } finally { confirmBtn.disabled = false; }
+  });
+}
+// A cheque number is unique per bank account. Returns a message if it can't be used, else null.
+async function chequeNoProblem(chequeNo, v, id, isCorrection) {
+  const wanted = chequeNo.trim().toLowerCase();
+  if (isCorrection && (v.chequeNo || '').trim().toLowerCase() === wanted) return "That is already this voucher's Cheque No.";
+  const all = await fetchFinanceCollection('disbursementVouchers');
+  const clash = all.find(x => x.id !== id && x.status !== 'Cancelled' && x.status !== 'Rejected'
+    && x.bankAccountId === v.bankAccountId && (x.chequeNo || '').trim().toLowerCase() === wanted);
+  return clash ? `Cheque No. ${chequeNo} is already used on ${clash.number} for this account.` : null;
+}
+// Keeps the cheque number shown on an Accounts Payable payment record in step with the voucher.
+async function syncChequeNoToAPPayment(v, newNo) {
+  if (v.type !== 'Regular Payment' || v.sourceCollection !== 'accountsPayable' || v.status !== 'Paid') return;
+  try {
+    const ap = await fetchFinanceDoc('accountsPayable', v.sourceId);
+    if (!ap || !Array.isArray(ap.payments)) return;
+    const prefix = `DV ${v.number}`;
+    const payments = ap.payments.map(p => (p.notes || '').startsWith(prefix) ? { ...p, notes: `${prefix} — Cheque ${newNo}` } : p);
+    await updateFinanceDoc('accountsPayable', v.sourceId, { payments });
+  } catch (e) { console.error(e); }
+}
+// Replaces the cheque number on an approved voucher and keeps the old one in its history.
+async function applyChequeCorrection(v, id, newNo, reason) {
+  const history = [...(Array.isArray(v.chequeHistory) ? v.chequeHistory : []),
+    { from: v.chequeNo || '', to: newNo, reason, changedBy: currentUser ? currentUser.email : null, date: todayISO() }];
+  await updateFinanceDoc('disbursementVouchers', id, { chequeNo: newNo, chequeHistory: history });
+  await syncChequeNoToAPPayment(v, newNo);
+}
+function showChequeCorrectionPrompt(container, opts) {
+  const inputCls = 'w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+  container.innerHTML = `
+    <div class="card p-4 max-w-2xl">
+      <p class="text-sm font-medium text-charcoal mb-1">Correct Cheque No.</p>
+      <p class="text-xs text-muted mb-3">Current: <span class="font-medium text-charcoal">${escapeAttr(opts.current) || '—'}</span>. Use this if a cheque was spoiled and reissued, or the number was entered wrongly. The old number stays in this voucher's history.</p>
+      <label class="block text-xs font-medium text-charcoal mb-1">New Cheque No. <span class="text-red-500">*</span></label>
+      <input id="voucher-cheque-fix-input" type="text" class="${inputCls} mb-3" />
+      <label class="block text-xs font-medium text-charcoal mb-1">Reason <span class="text-red-500">*</span></label>
+      <input id="voucher-cheque-fix-reason" type="text" placeholder="e.g. Cheque spoiled, reissued" class="${inputCls}" />
+      <p id="voucher-cheque-fix-error" class="hidden text-xs text-red-600 mt-1"></p>
+      <div class="flex gap-3 mt-3">
+        <button type="button" id="voucher-cheque-fix-confirm" class="btn-glass-sm text-sm">Save Correction</button>
+        <button type="button" id="voucher-cheque-fix-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+      </div>
+    </div>`;
+  document.getElementById('voucher-cheque-fix-input').focus();
+  document.getElementById('voucher-cheque-fix-dismiss').addEventListener('click', () => { container.innerHTML = ''; });
+  document.getElementById('voucher-cheque-fix-confirm').addEventListener('click', async () => {
+    const errEl = document.getElementById('voucher-cheque-fix-error');
+    const btn = document.getElementById('voucher-cheque-fix-confirm');
+    const newNo = document.getElementById('voucher-cheque-fix-input').value.trim();
+    const reason = document.getElementById('voucher-cheque-fix-reason').value.trim();
+    const fail = (msg) => { errEl.textContent = msg; errEl.classList.remove('hidden'); btn.disabled = false; };
+    if (!newNo || !reason) return fail('Enter the new Cheque No. and the reason for the change.');
+    btn.disabled = true;
+    if (opts.validate) {
+      const problem = await opts.validate(newNo);
+      if (problem) return fail(problem);
+    }
+    errEl.classList.add('hidden');
+    try { await opts.onConfirm(newNo, reason); } finally { btn.disabled = false; }
+  });
 }
 function showVoucherNotePrompt(container, opts) {
   container.innerHTML = `
@@ -5650,7 +5731,12 @@ async function renderDisbursementVoucherDetailPage(id) {
     ${dvDetailCardHtml(v)}
     <div id="dv-detail-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 print:hidden"></div>
     <div class="max-w-2xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden" id="dv-detail-actions"></div>
-    <div class="max-w-2xl mx-auto mt-3 print:hidden" id="dv-detail-prompt"></div>`);
+    <div class="max-w-2xl mx-auto mt-3 print:hidden" id="dv-detail-prompt"></div>
+    ${Array.isArray(v.chequeHistory) && v.chequeHistory.length ? `
+    <div class="max-w-2xl mx-auto mt-4 card p-4 print:hidden">
+      <p class="text-xs text-muted uppercase mb-2">Cheque No. history</p>
+      ${v.chequeHistory.map(h => `<p class="text-sm text-charcoal py-1.5 border-t border-borderc first:border-0">${escapeAttr(h.from) || '—'} → <span class="font-medium">${escapeAttr(h.to)}</span> <span class="text-muted">· ${escapeAttr(h.reason)} · ${escapeAttr(h.changedBy)} · ${formatDate(h.date)}</span></p>`).join('')}
+    </div>` : ''}`);
   refreshIcons();
 
   const actions = document.getElementById('dv-detail-actions');
@@ -5671,6 +5757,9 @@ async function renderDisbursementVoucherDetailPage(id) {
   if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled')) {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
   }
+  if (!retired && v.modeOfPayment === 'Cheque' && (v.status === 'Approved' || v.status === 'Paid') && canApproveDisbursements(v.amount)) {
+    buttons.push(`<button type="button" id="dv-cheque-fix-btn" class="btn-glass-sm text-sm">Correct Cheque No.</button>`);
+  }
   buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
   actions.innerHTML = buttons.join('');
   if (overLimitForRole) {
@@ -5682,16 +5771,17 @@ async function renderDisbursementVoucherDetailPage(id) {
 
   const setBusy = (busy) => { actions.querySelectorAll('button').forEach(b => b.disabled = busy); };
 
-  document.getElementById('dv-approve-btn')?.addEventListener('click', async () => {
+  const runApproval = async (chequeNo) => {
     setBusy(true);
     try {
+      const extra = chequeNo ? { chequeNo } : {};
       const requiresBatching = await dvRequiresBatching(v);
       if (requiresBatching) {
-        await updateFinanceDoc('disbursementVouchers', id, { status: 'Approved', approvedBy: currentUser.email, dateApproved: todayISO(), requiresBatching: true });
+        await updateFinanceDoc('disbursementVouchers', id, { status: 'Approved', approvedBy: currentUser.email, dateApproved: todayISO(), requiresBatching: true, ...extra });
       } else {
         const datePaid = todayISO();
-        await executeDisbursementVoucher({ ...v, id, datePaid });
-        await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, requiresBatching: false });
+        await executeDisbursementVoucher({ ...v, ...extra, id, datePaid });
+        await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', approvedBy: currentUser.email, dateApproved: datePaid, datePaid, requiresBatching: false, ...extra });
       }
       refreshApprovalsBadge();
       renderDisbursementVoucherDetailPage(id);
@@ -5701,6 +5791,35 @@ async function renderDisbursementVoucherDetailPage(id) {
       errBox.classList.remove('hidden');
       setBusy(false);
     }
+  };
+  document.getElementById('dv-approve-btn')?.addEventListener('click', () => {
+    // A cheque voucher can't be approved until the approver assigns the cheque number.
+    if (v.modeOfPayment === 'Cheque') {
+      showChequePrompt(promptBox, {
+        initial: v.chequeNo || '',
+        validate: (chequeNo) => chequeNoProblem(chequeNo, v, id, false),
+        onConfirm: (chequeNo) => runApproval(chequeNo),
+      });
+    } else {
+      runApproval(null);
+    }
+  });
+
+  document.getElementById('dv-cheque-fix-btn')?.addEventListener('click', () => {
+    showChequeCorrectionPrompt(promptBox, {
+      current: v.chequeNo || '',
+      validate: (newNo) => chequeNoProblem(newNo, v, id, true),
+      onConfirm: async (newNo, reason) => {
+        try {
+          await applyChequeCorrection(v, id, newNo, reason);
+          renderDisbursementVoucherDetailPage(id);
+        } catch (e) {
+          console.error(e);
+          errBox.textContent = 'Could not save the correction. Please try again.';
+          errBox.classList.remove('hidden');
+        }
+      },
+    });
   });
 
   document.getElementById('dv-cancel-btn')?.addEventListener('click', () => {
@@ -5796,7 +5915,6 @@ async function renderEditDisbursementVoucherPage(id) {
 
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
     const purpose = document.getElementById('field-dvPurpose').value.trim();
     const bankSel = document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel.value;
@@ -5812,11 +5930,6 @@ async function renderEditDisbursementVoucherPage(id) {
       errBox.classList.remove('hidden');
       return;
     }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
-      errBox.classList.remove('hidden');
-      return;
-    }
     if (maxAmount != null && amount > maxAmount + 0.01) {
       errBox.textContent = `Amount cannot exceed ${formatCurrency(maxAmount)}.`;
       errBox.classList.remove('hidden');
@@ -5826,7 +5939,7 @@ async function renderEditDisbursementVoucherPage(id) {
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
       await updateFinanceDoc('disbursementVouchers', id, {
-        amount, modeOfPayment, chequeNo, purpose, bankAccountId, bankAccountName,
+        amount, modeOfPayment, chequeNo: '', purpose, bankAccountId, bankAccountName,
         status: 'Pending', dateRequested: todayISO(),
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
@@ -6084,22 +6197,16 @@ async function renderNewCashAdvancePage() {
     const bankAccountId = bankSel.value;
     const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
     const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
 
     if (!employeeName || !type || !amount || !date || !purpose || !bankAccountId || !modeOfPayment) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
     }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No.';
-      errBox.classList.remove('hidden');
-      return;
-    }
 
     const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
     const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment, chequeNo };
+    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose, bankAccountId, bankAccountName, modeOfPayment };
 
     document.getElementById('ca-form').classList.add('hidden');
     const wrap = document.getElementById('ca-preview-wrap');
@@ -6114,7 +6221,7 @@ async function renderNewCashAdvancePage() {
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
           <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
           <div><p class="text-xs text-muted uppercase">Source Account</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}${draft.chequeNo ? ' — Cheque No. ' + escapeAttr(draft.chequeNo) : ''}</p></div>
+          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}${draft.modeOfPayment === 'Cheque' ? ' — Cheque No. assigned at approval' : ''}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
         ${voucherFooterHtml()}
@@ -6143,7 +6250,7 @@ async function renderNewCashAdvancePage() {
         });
         await createFinanceDoc('disbursementVouchers', {
           number: draft.dvNumber, type: 'Cash Advance Release', payee: draft.employeeName, amount: draft.amount,
-          purpose: draft.purpose, modeOfPayment: draft.modeOfPayment, chequeNo: draft.chequeNo, bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
+          purpose: draft.purpose, modeOfPayment: draft.modeOfPayment, bankAccountId: draft.bankAccountId, bankAccountName: draft.bankAccountName,
           accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
           status: 'Pending', requiresBatching: true,
