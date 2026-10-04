@@ -5119,10 +5119,10 @@ async function executeRegularPaymentDV(dv) {
 async function executeCashAdvanceReleaseDV(dv) {
   const { amount, bankAccountName, bankAccountId, datePaid, number, cashAdvanceId } = dv;
   await postGLEntries([
-    { date: datePaid, account: 'Advances to Employees', debit: amount, credit: 0, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId },
+    { date: datePaid, account: dv.accountTitle || 'Advances to Employees', debit: amount, credit: 0, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId },
     { date: datePaid, account: bankAccountName, debit: 0, credit: amount, description: `Cash advance released (DV ${number})`, sourceType: 'cash-advance-release', sourceId: cashAdvanceId, bankAccountId },
   ]);
-  await updateFinanceDoc('cashAdvances', cashAdvanceId, { status: 'Outstanding', dateReleased: datePaid, bankAccountId, bankAccountName });
+  await updateFinanceDoc('cashAdvances', cashAdvanceId, { status: 'Outstanding', dateReleased: datePaid, bankAccountId, bankAccountName, accountTitle: dv.accountTitle || 'Advances to Employees' });
 }
 // Posts the actual GL entries for a Cash Advance liquidation. Only called
 // once a liquidation has been Approved — submitting it just stores the
@@ -5133,14 +5133,14 @@ async function executeCashAdvanceLiquidation(ca, id, pending) {
     date: dateLiquidated, account: i.category, debit: i.amount, credit: 0,
     description: `Cash advance liquidation — ${ca.number} (${i.description || i.category})`, sourceType: 'cash-advance-liquidation', sourceId: id,
   }));
-  glLines.push({ date: dateLiquidated, account: 'Advances to Employees', debit: 0, credit: ca.amount, description: `Cash advance liquidation — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id });
+  glLines.push({ date: dateLiquidated, account: ca.accountTitle || 'Advances to Employees', debit: 0, credit: ca.amount, description: `Cash advance liquidation — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id });
 
   let shortfallAPId = null;
   if (excess > 0) {
     glLines.push({ date: dateLiquidated, account: returnAccountName, debit: excess, credit: 0, description: `Cash advance excess returned — ${ca.number}`, sourceType: 'cash-advance-liquidation', sourceId: id, bankAccountId: returnAccountId });
   } else if (shortfall > 0) {
     const apRef = await createFinanceDoc('accountsPayable', {
-      source: 'cash-advance-shortfall', payee: ca.employeeName, category: 'Advances to Employees',
+      source: 'cash-advance-shortfall', payee: ca.employeeName, category: ca.accountTitle || 'Advances to Employees',
       amount: shortfall, amountPaid: 0, balance: shortfall, status: 'Unpaid', payments: [],
       dateReceived: dateLiquidated, dueDate: '', description: `Cash advance shortfall reimbursement — ${ca.number}`,
     });
@@ -5904,6 +5904,11 @@ function showFundingPrompt(container, opts) {
           <select id="fund-account" class="${cls}"></select>
           <p id="fund-account-note" class="text-xs mt-1.5 text-muted"></p>
         </div>
+        <div class="sm:col-span-2">
+          <label class="block text-xs font-medium text-charcoal mb-1">Account Title <span class="text-red-500">*</span></label>
+          <select id="fund-title" class="${cls}">${advanceAccountChoices(opts.accountTitle).map(a => `<option value="${escapeAttr(a)}" ${a === opts.accountTitle ? 'selected' : ''}>${escapeAttr(a)}</option>`).join('')}</select>
+          <p class="text-xs text-muted mt-1.5">The account this advance is charged to when it is released. Change it here if it isn't right.</p>
+        </div>
         <div id="fund-cheque-wrap" class="hidden sm:col-span-2">
           <label class="block text-xs font-medium text-charcoal mb-1">Cheque No. <span class="text-red-500">*</span></label>
           <input id="fund-cheque" type="text" class="${cls}" />
@@ -5958,7 +5963,7 @@ function showFundingPrompt(container, opts) {
     if (!acc) return fail('Choose the account this will be paid from.');
     if (modeOfPayment === 'Cheque' && !chequeNo) return fail('Enter the Cheque No.');
     btn.disabled = true;
-    const picked = { modeOfPayment, bankAccountId: acc.id, bankAccountName: label(acc), chequeNo };
+    const picked = { modeOfPayment, bankAccountId: acc.id, bankAccountName: label(acc), chequeNo, accountTitle: document.getElementById('fund-title').value };
     if (opts.validate) {
       const problem = await opts.validate(picked);
       if (problem) return fail(problem);
@@ -6084,9 +6089,9 @@ async function renderDisbursementVoucherDetailPage(id) {
         balances = await computeBankAccountBalances(accounts);
       } catch (e) { console.error(e); }
       showFundingPrompt(promptBox, {
-        accounts, balances, amount: v.amount,
+        accounts, balances, amount: v.amount, accountTitle: v.accountTitle,
         validate: (f) => f.modeOfPayment === 'Cheque' ? chequeNoProblem(f.chequeNo, { ...v, bankAccountId: f.bankAccountId }, id, false) : null,
-        onConfirm: (f) => runApproval(f.chequeNo, { modeOfPayment: f.modeOfPayment, bankAccountId: f.bankAccountId, bankAccountName: f.bankAccountName }),
+        onConfirm: (f) => runApproval(f.chequeNo, { modeOfPayment: f.modeOfPayment, bankAccountId: f.bankAccountId, bankAccountName: f.bankAccountName, accountTitle: f.accountTitle }),
       });
     // A cheque voucher can't be approved until the approver assigns the cheque number.
     } else if (v.modeOfPayment === 'Cheque') {
@@ -6207,7 +6212,9 @@ async function renderEditDisbursementVoucherPage(id) {
       <div id="dv-edit-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         ${numberField('dvAmount', 'Amount (₱)', { required: true, step: '0.01', value: v.amount })}
-        ${v.type === 'Cash Advance Release' ? '' : `${modeOfPaymentFieldHtml(v.modeOfPayment, v.chequeNo)}
+        ${v.type === 'Cash Advance Release'
+          ? selectField('dvAccountTitle', 'Account Title', advanceAccountChoices(v.accountTitle), { required: true, value: v.accountTitle })
+          : `${modeOfPaymentFieldHtml(v.modeOfPayment, v.chequeNo)}
         ${bankAccountSelectHtml(bankAccounts, v.bankAccountId, { required: true })}`}
         ${textareaField('dvPurpose', 'Purpose / Description', { span2: true, required: true, value: v.purpose })}
       </div>
@@ -6228,13 +6235,14 @@ async function renderEditDisbursementVoucherPage(id) {
 
     const amount = Number(document.getElementById('field-dvAmount').value) || 0;
     const fundingAtApproval = v.type === 'Cash Advance Release';   // the approver chooses the funding
+    const advanceAccountTitle = fundingAtApproval ? document.getElementById('field-dvAccountTitle').value : null;
     const modeOfPayment = fundingAtApproval ? null : document.getElementById('field-modeOfPayment').value;
     const purpose = document.getElementById('field-dvPurpose').value.trim();
     const bankSel = fundingAtApproval ? null : document.getElementById('field-bankAccountId');
     const bankAccountId = bankSel ? bankSel.value : null;
     const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : null;
 
-    if (!amount || amount <= 0 || !purpose || (!fundingAtApproval && (!modeOfPayment || !bankAccountId))) {
+    if (!amount || amount <= 0 || !purpose || (fundingAtApproval && !advanceAccountTitle) || (!fundingAtApproval && (!modeOfPayment || !bankAccountId))) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
@@ -6254,13 +6262,14 @@ async function renderEditDisbursementVoucherPage(id) {
     try {
       await updateFinanceDoc('disbursementVouchers', id, {
         amount, modeOfPayment, chequeNo: '', purpose, bankAccountId, bankAccountName,
+        ...(fundingAtApproval ? { accountTitle: advanceAccountTitle } : {}),
         status: 'Pending', dateRequested: todayISO(),
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
       });
       // keep the advance itself in step with the voucher, since liquidation clears the advance's amount
       if (v.type === 'Cash Advance Release' && v.cashAdvanceId) {
-        await updateFinanceDoc('cashAdvances', v.cashAdvanceId, { amount });
+        await updateFinanceDoc('cashAdvances', v.cashAdvanceId, { amount, accountTitle: advanceAccountTitle });
       }
       refreshApprovalsBadge();
       navigateTo('disbursement/vouchers/view/' + id);
@@ -6274,6 +6283,20 @@ async function renderEditDisbursementVoucherPage(id) {
 }
 
 /* ---- Cash Advances ---- */
+// The account a Cash Advance is charged to when it is released, and cleared from when it is liquidated.
+// Any account in the Chart of Accounts will do except Cash and the receivable/payable control accounts.
+function advanceAccountChoices(extra) {
+  const list = ACCOUNTS_CHART.filter(a => !['Cash', 'Accounts Receivable', 'Accounts Payable'].includes(a));
+  if (extra && !list.includes(extra)) list.push(extra);
+  return list;
+}
+// Suggested account for each advance type, from whatever is in the Chart of Accounts.
+function defaultAdvanceAccount(type, choices) {
+  const find = (re) => choices.find(a => re.test(a)) || '';
+  if (type === 'Materials Purchase') return find(/material|purchase/i);
+  if (type === 'Equipment Purchase') return find(/equipment/i);
+  return choices.includes('Advances to Employees') ? 'Advances to Employees' : '';
+}
 // "Unliquidated" = money has been released and the advance hasn't been liquidated yet.
 function isUnliquidated(a) { return a.status === 'Outstanding' || a.status === 'Pending Liquidation Review'; }
 // Every unliquidated advance for one person, oldest first. Matches on the name as typed (ignoring case).
@@ -6415,6 +6438,10 @@ async function renderNewCashAdvancePage() {
         ${selectField('caType', 'Type', CA_TYPES, { required: true, value: 'Personal/Operational' })}
         ${numberField('caAmount', 'Amount (₱)', { required: true, step: '0.01' })}
         ${dateField('caDate', 'Date Requested', { required: true, value: todayISO() })}
+        <div>
+          ${selectField('caAccountTitle', 'Account Title', advanceAccountChoices(), { required: true, value: defaultAdvanceAccount('Personal/Operational', advanceAccountChoices()) })}
+          <p class="text-xs text-muted mt-1.5">The account this advance is charged to. If the one you need isn't listed, ask a System Admin to add it to the Chart of Accounts.</p>
+        </div>
         ${textareaField('caPurpose', 'Purpose', { span2: true, required: true })}
       </div>
       <p class="text-xs text-muted">How this advance is paid — cash from a cash fund, or by cheque — is chosen by the approver.</p>
@@ -6425,6 +6452,14 @@ async function renderNewCashAdvancePage() {
     </form>
     <div id="ca-preview-wrap" class="hidden"></div>`);
   refreshIcons();
+
+  // Suggest an account to match the type — until someone picks one themselves
+  let accountPickedByHand = false;
+  document.getElementById('field-caAccountTitle').addEventListener('change', () => { accountPickedByHand = true; });
+  document.getElementById('field-caType').addEventListener('change', (e) => {
+    if (accountPickedByHand) return;
+    document.getElementById('field-caAccountTitle').value = defaultAdvanceAccount(e.target.value, advanceAccountChoices());
+  });
 
   document.getElementById('field-caEmployeeName').addEventListener('blur', () => {
     const warnBox = document.getElementById('ca-employee-warning');
@@ -6442,8 +6477,9 @@ async function renderNewCashAdvancePage() {
     const amount = Number(document.getElementById('field-caAmount').value) || 0;
     const date = document.getElementById('field-caDate').value;
     const purpose = document.getElementById('field-caPurpose').value.trim();
+    const accountTitle = document.getElementById('field-caAccountTitle').value;
 
-    if (!employeeName || !type || !amount || !date || !purpose) {
+    if (!employeeName || !type || !amount || !date || !purpose || !accountTitle) {
       errBox.textContent = 'Please fill in all required fields.';
       errBox.classList.remove('hidden');
       return;
@@ -6451,7 +6487,7 @@ async function renderNewCashAdvancePage() {
 
     const caNumber = await generateSeriesNumber('cashAdvances', 'CA', 'number');
     const dvNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose };
+    const draft = { caNumber, dvNumber, employeeName, type, amount, date, purpose, accountTitle };
 
     document.getElementById('ca-form').classList.add('hidden');
     const wrap = document.getElementById('ca-preview-wrap');
@@ -6464,7 +6500,7 @@ async function renderNewCashAdvancePage() {
           <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.employeeName)}</p></div>
           <div><p class="text-xs text-muted uppercase">Type</p><p class="font-medium text-charcoal mt-0.5">${draft.type}</p></div>
           <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">Advances to Employees</p></div>
+          <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.accountTitle)}</p></div>
           <div><p class="text-xs text-muted uppercase">Funding</p><p class="font-medium text-charcoal mt-0.5">${fundingPlaceholderHtml()}</p></div>
           <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
         </div>
@@ -6490,12 +6526,12 @@ async function renderNewCashAdvancePage() {
       try {
         const caRef = await createFinanceDoc('cashAdvances', {
           number: draft.caNumber, employeeName: draft.employeeName, type: draft.type, purpose: draft.purpose,
-          amount: draft.amount, dateRequested: draft.date, status: 'Pending Approval',
+          accountTitle: draft.accountTitle, amount: draft.amount, dateRequested: draft.date, status: 'Pending Approval',
         });
         // No funding source yet — the approver chooses how it is paid, and from which account.
         await createFinanceDoc('disbursementVouchers', {
           number: draft.dvNumber, type: 'Cash Advance Release', payee: draft.employeeName, amount: draft.amount,
-          purpose: draft.purpose, accountTitle: 'Advances to Employees', cashAdvanceId: caRef.id,
+          purpose: draft.purpose, accountTitle: draft.accountTitle, cashAdvanceId: caRef.id,
           requestedBy: currentUser ? currentUser.email : null, dateRequested: draft.date,
           status: 'Pending',
         });
@@ -6532,6 +6568,7 @@ async function renderCashAdvanceDetailPage(id) {
         <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(ca.amount)}</p></div>
         <div><p class="text-xs text-muted uppercase">Date Released</p><p class="font-medium text-charcoal mt-0.5">${formatDate(ca.dateReleased)}</p></div>
         <div><p class="text-xs text-muted uppercase">Type</p><p class="font-medium text-charcoal mt-0.5">${ca.type || '—'}</p></div>
+        <div><p class="text-xs text-muted uppercase">Account Title</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(ca.accountTitle || 'Advances to Employees')}</p></div>
       </div>
       ${ca.status === 'Pending Liquidation Review' && pending ? `
         <div class="border-t border-borderc pt-4">
