@@ -267,11 +267,10 @@ const NAV = [
   },
   {
     name: "Disbursement", icon: "receipt-text", path: "disbursement",
-    description: "Disbursement vouchers, encashment batching, petty cash, and cash advances.",
+    description: "Disbursement vouchers, encashment batching, and cash advances.",
     children: [
       { name: "Disbursement Vouchers", path: "disbursement/vouchers", description: "Request and approve payment disbursements." },
       { name: "Encashment Batch", path: "disbursement/encashment-batch", description: "Group approved cash vouchers into one withdrawal." },
-      { name: "Petty Cash", path: "disbursement/petty-cash", description: "Petty cash funds and vouchers." },
       { name: "Cash Advances", path: "disbursement/cash-advances", description: "Employee cash advance requests and liquidation." },
       { name: "Encashment Summary", path: "disbursement/encashment-summary", description: "Report of processed encashment batches." },
     ]
@@ -1025,30 +1024,6 @@ function renderRoute() {
     renderEditDisbursementVoucherPage(dvId);
     return;
   }
-  if (path.startsWith('disbursement/petty-cash/new-voucher/')) {
-    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
-    const fundId = path.substring('disbursement/petty-cash/new-voucher/'.length);
-    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
-    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'New Petty Cash Voucher' });
-    renderNewPettyCashVoucherPage(fundId);
-    return;
-  }
-  if (path.startsWith('disbursement/petty-cash/vouchers/')) {
-    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
-    const fundId = path.substring('disbursement/petty-cash/vouchers/'.length);
-    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
-    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Petty Cash Vouchers' });
-    renderPettyCashVouchersListPage(fundId);
-    return;
-  }
-  if (path.startsWith('disbursement/petty-cash/replenish/')) {
-    if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
-    const fundId = path.substring('disbursement/petty-cash/replenish/'.length);
-    setActiveNav('disbursement/petty-cash', NAV.find(n => n.path === 'disbursement'));
-    buildBreadcrumb(NAV.find(n => n.path === 'disbursement'), { name: 'Request Replenishment' });
-    renderNewReplenishmentPage(fundId);
-    return;
-  }
   if (path === 'disbursement/cash-advances/new') {
     if (!canAccess('disbursement')) { renderNoAccess('Disbursement'); buildBreadcrumb(null, null); return; }
     setActiveNav('disbursement/cash-advances', NAV.find(n => n.path === 'disbursement'));
@@ -1155,7 +1130,6 @@ function renderRoute() {
   const disbursementPages = {
     'disbursement/vouchers': renderDisbursementVouchersPage,
     'disbursement/encashment-batch': renderEncashmentBatchPage,
-    'disbursement/petty-cash': renderPettyCashPage,
     'disbursement/cash-advances': renderCashAdvancesPage,
     'disbursement/encashment-summary': renderEncashmentSummaryPage,
   };
@@ -4701,14 +4675,12 @@ function maskAccountNumber(num) {
   const clean = String(num).replace(/\s+/g, '');
   return clean.length > 4 ? '••••' + clean.slice(-4) : clean;
 }
-async function fetchActiveBankAccounts(includeAllTypes) {
+async function fetchActiveBankAccounts() {
   const all = await fetchFinanceCollection('bankAccounts');
   const active = all.filter(b => b.status !== 'Inactive');
   // Custodian sees/chooses Cash-type funds only, everywhere — never a
-  // Checking/Savings account — unless a caller explicitly opts out
-  // (Petty Cash Replenishment genuinely needs the full list, since it
-  // draws from a real bank account by design).
-  if (!includeAllTypes && currentProfile && currentProfile.role === 'custodian') {
+  // Checking/Savings account.
+  if (currentProfile && currentProfile.role === 'custodian') {
     return active.filter(b => b.accountType === 'Cash');
   }
   return active;
@@ -5337,10 +5309,15 @@ async function renderCashForecastPage() {
 
 /* ==========================================================================
    DISBURSEMENT MODULE  (Firestore-backed: disbursementVouchers,
-   pettyCashVouchers, cashAdvances, encashmentBatches — Cash Funds reuse
+   cashAdvances, encashmentBatches — Cash Funds reuse
    bankAccounts with accountType 'Cash')
    ========================================================================== */
-const DV_TYPES = ['Regular Payment', 'Petty Cash Replenishment', 'Cash Advance Release'];
+const DV_TYPES = ['Regular Payment', 'Cash Advance Release'];
+// Retired voucher types: Petty Cash was removed from the system. Any old voucher of
+// these types stays visible for the record, but can't be approved, batched, paid or
+// resubmitted — only cancelled (so nothing is left stuck).
+const RETIRED_DV_TYPES = ['Petty Cash Replenishment'];
+function isRetiredDVType(type) { return RETIRED_DV_TYPES.includes(type); }
 // 'Rejected' is kept only as a legacy value some existing vouchers may
 // already have — it's no longer produced going forward, and displays
 // identically to Cancelled everywhere.
@@ -5372,7 +5349,7 @@ function canApproveDisbursements(amount) {
   }
   return false;
 }
-const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'pettyCashVouchers': 'PCV', 'cashAdvances': 'CA', 'encashmentBatches': 'ENC' };
+const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'cashAdvances': 'CA', 'encashmentBatches': 'ENC' };
 async function getNumberingConfig(seriesKey, defaultPrefix) {
   let cfg;
   try {
@@ -5492,21 +5469,6 @@ async function executeRegularPaymentDV(dv) {
     ]);
   }
 }
-async function executeReplenishmentDV(dv) {
-  const { accountTitleBreakdown, bankAccountName, bankAccountId, datePaid, number, pcvIds, id, batchId, batchNumber } = dv;
-  const glLines = (accountTitleBreakdown || []).map(item => ({
-    date: datePaid, account: item.account, debit: item.amount, credit: 0,
-    description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id,
-  }));
-  glLines.push({ date: datePaid, account: bankAccountName, debit: 0, credit: dv.amount, description: `Petty cash replenishment (DV ${number})`, sourceType: 'petty-cash-replenishment', sourceId: id, bankAccountId });
-  await postGLEntries(glLines);
-  for (const pcvId of (pcvIds || [])) {
-    await updateFinanceDoc('pettyCashVouchers', pcvId, {
-      replenished: true, replenishmentBatchId: batchId || null,
-      replenishmentBatchNumber: batchNumber || null, replenishedDate: datePaid,
-    });
-  }
-}
 async function executeCashAdvanceReleaseDV(dv) {
   const { amount, bankAccountName, bankAccountId, datePaid, number, cashAdvanceId } = dv;
   await postGLEntries([
@@ -5543,8 +5505,9 @@ async function executeCashAdvanceLiquidation(ca, id, pending) {
 }
 async function executeDisbursementVoucher(dv) {
   if (dv.type === 'Regular Payment') return executeRegularPaymentDV(dv);
-  if (dv.type === 'Petty Cash Replenishment') return executeReplenishmentDV(dv);
   if (dv.type === 'Cash Advance Release') return executeCashAdvanceReleaseDV(dv);
+  // Never silently mark an unrecognised/retired voucher as paid without posting anything.
+  throw new Error('Unsupported voucher type: ' + dv.type);
 }
 async function dvRequiresBatching(dv) {
   if (dv.type !== 'Regular Payment') return true;
@@ -5601,7 +5564,7 @@ async function renderDisbursementVouchersPage() {
   }
 }
 
-/* ---- Disbursement Vouchers: request (Regular Payment only — Replenishment/CA Release are created from their own pages) ---- */
+/* ---- Disbursement Vouchers: request (Regular Payment only — Cash Advance Release is created from its own page) ---- */
 async function renderNewDisbursementVoucherPage(sourceCollection, sourceId) {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let sourceRecord, bankAccounts = [];
@@ -5836,20 +5799,24 @@ async function renderDisbursementVoucherDetailPage(id) {
   const buttons = [`<button type="button" onclick="window.print()" class="text-sm font-medium text-forest border border-forest/30 hover:bg-forest/5 rounded-md px-3 py-2">Print</button>`];
 
   const isRequester = !!(currentUser && v.requestedBy === currentUser.email);
-  const overLimitForRole = v.status === 'Pending' && canApproveDisbursements() && !canApproveDisbursements(v.amount);
-  if (v.status === 'Pending' && canApproveDisbursements(v.amount)) {
+  const retired = isRetiredDVType(v.type);
+  const overLimitForRole = !retired && v.status === 'Pending' && canApproveDisbursements() && !canApproveDisbursements(v.amount);
+  if (!retired && v.status === 'Pending' && canApproveDisbursements(v.amount)) {
     buttons.push(`<button type="button" id="dv-approve-btn" class="btn-glass-sm text-sm">Approve</button>`);
   }
-  if (v.status === 'Pending' && (canApproveDisbursements() || isRequester)) {
+  // A retired-type voucher can be cancelled even once Approved, so none are left stuck in the batch queue.
+  if ((v.status === 'Pending' || (retired && v.status === 'Approved')) && (canApproveDisbursements() || isRequester)) {
     buttons.push(`<button type="button" id="dv-cancel-btn" class="text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 rounded-md px-3 py-2">Cancel</button>`);
   }
-  if ((v.status === 'Rejected' || v.status === 'Cancelled') && (v.type !== 'Petty Cash Replenishment' || canApproveDisbursements())) {
+  if (!retired && (v.status === 'Rejected' || v.status === 'Cancelled')) {
     buttons.push(`<a href="#/disbursement/vouchers/edit/${id}" class="btn-glass-sm text-sm">Edit & Resubmit</a>`);
   }
   buttons.push(`<a href="#/disbursement/vouchers" class="text-sm text-muted hover:text-charcoal ml-auto">Back to list</a>`);
   actions.innerHTML = buttons.join('');
   if (overLimitForRole) {
     promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">This amount is above your approval limit — a System Admin needs to approve it.</p>`;
+  } else if (retired && (v.status === 'Pending' || v.status === 'Approved')) {
+    promptBox.innerHTML = `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">Petty Cash is no longer used in this system. This voucher is kept for the record and can only be cancelled.</p>`;
   }
   refreshIcons();
 
@@ -5883,11 +5850,6 @@ async function renderDisbursementVoucherDetailPage(id) {
       onConfirm: async (notes) => {
         try {
           await updateFinanceDoc('disbursementVouchers', id, { status: 'Cancelled', cancelledBy: currentUser.email, dateCancelled: todayISO(), cancellationReason: notes });
-          if (v.type === 'Petty Cash Replenishment' && Array.isArray(v.pcvIds)) {
-            for (const pcvId of v.pcvIds) {
-              await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: null, replenishmentRequestNumber: null });
-            }
-          }
           refreshApprovalsBadge();
           renderDisbursementVoucherDetailPage(id);
         } catch (e) {
@@ -5915,24 +5877,17 @@ async function renderEditDisbursementVoucherPage(id) {
     return;
   }
   try {
-    // Petty Cash Replenishment always draws from a real bank account (that's
-    // the whole point — refilling the cash box), so it needs the full list
-    // even for a Custodian, who is otherwise restricted to Cash-type
-    // accounts everywhere else.
-    bankAccounts = await fetchActiveBankAccounts(v.type === 'Petty Cash Replenishment');
+    bankAccounts = await fetchActiveBankAccounts();
   } catch (e) { console.error(e); }
   if (v.status !== 'Rejected' && v.status !== 'Cancelled') {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Only a Rejected or Cancelled voucher can be edited.</p><a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a></div>`);
     return;
   }
-  if (v.type === 'Petty Cash Replenishment' && !canApproveDisbursements()) {
+  if (isRetiredDVType(v.type)) {
     contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
-      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
-      <h2 class="text-base font-medium text-charcoal">Replenishment requests are limited to Finance Manager and System Admin</h2>
-      <p class="text-sm text-muted mt-1.5 max-w-sm">Ask a Manager/Admin to resubmit this one.</p>
+      <p class="text-sm text-charcoal font-medium">This voucher type is no longer used, so it can't be resubmitted.</p>
       <a href="#/disbursement/vouchers/view/${id}" class="mt-4 text-sm text-forest hover:underline">Back to Voucher</a>
     </div>`);
-    refreshIcons();
     return;
   }
 
@@ -6011,11 +5966,6 @@ async function renderEditDisbursementVoucherPage(id) {
         rejectedBy: null, dateRejected: null, rejectionReason: null,
         cancelledBy: null, dateCancelled: null, cancellationReason: null,
       });
-      if (v.type === 'Petty Cash Replenishment' && Array.isArray(v.pcvIds)) {
-        for (const pcvId of v.pcvIds) {
-          await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: id, replenishmentRequestNumber: v.number });
-        }
-      }
       refreshApprovalsBadge();
       navigateTo('disbursement/vouchers/view/' + id);
     } catch (err) {
@@ -6038,7 +5988,7 @@ async function renderEncashmentBatchPage() {
   refreshIcons();
   try {
     const all = await fetchFinanceCollection('disbursementVouchers');
-    const pending = all.filter(v => v.status === 'Approved');
+    const pending = all.filter(v => v.status === 'Approved' && !isRetiredDVType(v.type));
     if (!pending.length) {
       document.getElementById('batch-list-container').innerHTML = `<div class="card flex items-center justify-center text-center py-16 text-sm text-muted">Nothing waiting for encashment right now.</div>`;
       return;
@@ -6113,17 +6063,11 @@ async function renderEncashmentBatchPage() {
         const selectedVouchers = pending.filter(v => selectedIds.includes(v.id));
         const totalAmount = selectedVouchers.reduce((s, v) => s + (Number(v.amount) || 0), 0);
         const batchNumber = await generateSeriesNumber('encashmentBatches', 'ENC', 'number');
-        const pcvLookup = {};
-        try {
-          (await fetchFinanceCollection('pettyCashVouchers')).forEach(p => { pcvLookup[p.id] = p.number; });
-        } catch (e) { console.error(e); }
         const batchRef = await createFinanceDoc('encashmentBatches', {
           number: batchNumber, batchDate,
           voucherRefs: selectedVouchers.map(v => ({
             id: v.id, type: v.type, number: v.number, amount: v.amount,
             accountTitleBreakdown: v.accountTitleBreakdown || [{ account: v.accountTitle, amount: v.amount }],
-            pcvIds: v.pcvIds || null,
-            pcvNumbers: v.pcvIds ? v.pcvIds.map(id => pcvLookup[id]).filter(Boolean) : null,
           })),
           totalAmount, processedBy: currentUser.email, status: 'Processed',
         });
@@ -6144,366 +6088,6 @@ async function renderEncashmentBatchPage() {
     console.error(e);
     document.getElementById('batch-list-container').innerHTML = poLoadErrorHtml();
   }
-}
-
-/* ---- Petty Cash ---- */
-async function computePettyCashOnHand(fund) {
-  const pcvs = await fetchFinanceCollection('pettyCashVouchers');
-  const unreplenished = pcvs.filter(p => p.fundId === fund.id && p.status === 'Paid' && !p.replenished);
-  const available = unreplenished.filter(p => !p.replenishmentRequestId);
-  const spent = unreplenished.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  return { cashOnHand: Number((fund.openingBalance - spent).toFixed(2)), unreplenished, available };
-}
-async function renderPettyCashPage() {
-  contentWrap(`
-    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
-      <div>
-        <h1 class="text-xl font-semibold text-charcoal">Petty Cash</h1>
-        <p class="text-sm text-muted mt-1">Cash funds kept on hand. Individual spends are logged directly; replenishment goes through a Disbursement Voucher.</p>
-      </div>
-      <a href="#/cash-management/bank-accounts/new" class="btn-primary text-sm">+ New Cash Fund</a>
-    </div>
-    <div id="petty-cash-container" class="text-sm text-muted">Loading...</div>`);
-  refreshIcons();
-  try {
-    const allAccounts = await fetchFinanceCollection('bankAccounts');
-    const funds = allAccounts.filter(a => a.accountType === 'Cash');
-    if (!funds.length) {
-      document.getElementById('petty-cash-container').innerHTML = `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
-        <p class="text-sm text-charcoal font-medium">No Cash Funds yet.</p>
-        <p class="text-sm text-muted mt-1">Create a Bank Account with type "Cash" to represent a petty cash box or cash-on-hand fund.</p>
-        <a href="#/cash-management/bank-accounts/new" class="mt-4 btn-primary text-sm">+ New Cash Fund</a>
-      </div>`;
-      return;
-    }
-    const rows = await Promise.all(funds.map(async (f) => {
-      const { cashOnHand, unreplenished, available } = await computePettyCashOnHand(f);
-      return { fund: f, cashOnHand, unreplenishedCount: unreplenished.length, availableCount: available.length };
-    }));
-    document.getElementById('petty-cash-container').innerHTML = `
-      <div class="card overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">Fund</th><th class="px-4 py-3">Face Value</th><th class="px-4 py-3">Cash on Hand</th><th class="px-4 py-3">Unreplenished</th><th class="px-4 py-3 text-right">Actions</th>
-          </tr></thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
-                <td class="px-4 py-3 font-medium text-charcoal">${r.fund.nickname}</td>
-                <td class="px-4 py-3">${formatCurrency(r.fund.openingBalance)}</td>
-                <td class="px-4 py-3 font-medium ${r.cashOnHand < r.fund.openingBalance * 0.2 ? 'text-red-600' : 'text-charcoal'}">${formatCurrency(r.cashOnHand)}</td>
-                <td class="px-4 py-3">${r.unreplenishedCount}${r.unreplenishedCount > r.availableCount ? ` <span class="text-xs text-muted">(${r.unreplenishedCount - r.availableCount} already requested)</span>` : ''}</td>
-                <td class="px-4 py-3 text-right space-x-3">
-                  <a href="#/disbursement/petty-cash/new-voucher/${r.fund.id}" class="btn-glass-sm">New Voucher</a>
-                  <a href="#/disbursement/petty-cash/vouchers/${r.fund.id}" class="btn-glass-sm">Vouchers</a>
-                  ${r.availableCount && canApproveDisbursements() ? `<a href="#/disbursement/petty-cash/replenish/${r.fund.id}" class="btn-glass-sm">Replenish</a>` : ''}
-                </td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`;
-    refreshIcons();
-  } catch (e) {
-    console.error(e);
-    document.getElementById('petty-cash-container').innerHTML = poLoadErrorHtml();
-  }
-}
-async function renderNewPettyCashVoucherPage(fundId) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let fund;
-  try {
-    fund = await fetchFinanceDoc('bankAccounts', fundId);
-  } catch (e) {
-    console.error(e);
-    contentWrap(poLoadErrorHtml());
-    return;
-  }
-  if (!fund) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`);
-    return;
-  }
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">New Petty Cash Voucher</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)} — no approval needed, stamped Paid immediately.</p>
-    </div>
-    <form id="pcv-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="pcv-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('pcvDate', 'Date', { required: true, value: todayISO() })}
-        ${selectField('pcvCategory', 'Category', EXPENSE_ACCOUNTS, { required: true })}
-        ${numberField('pcvAmount', 'Amount (₱)', { required: true, step: '0.01' })}
-        ${textField('pcvRequestedBy', 'Requested By', { value: currentUser ? currentUser.email : '' })}
-        ${textareaField('pcvPurpose', 'Purpose', { span2: true, required: true })}
-      </div>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="pcv-preview-btn" type="button" class="btn-primary">Preview</button>
-        <a href="#/disbursement/petty-cash" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>
-    <div id="pcv-preview-wrap" class="hidden"></div>`);
-  refreshIcons();
-
-  document.getElementById('pcv-preview-btn').addEventListener('click', async () => {
-    const errBox = document.getElementById('pcv-form-error');
-    errBox.classList.add('hidden');
-    const date = document.getElementById('field-pcvDate').value;
-    const category = document.getElementById('field-pcvCategory').value;
-    const amount = Number(document.getElementById('field-pcvAmount').value) || 0;
-    const requestedBy = document.getElementById('field-pcvRequestedBy').value.trim();
-    const purpose = document.getElementById('field-pcvPurpose').value.trim();
-
-    if (!date || !category || !amount || !purpose) {
-      errBox.textContent = 'Please fill in all required fields.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-
-    const previewNumber = await generateSeriesNumber('pettyCashVouchers', 'PCV', 'number');
-    const draft = { number: previewNumber, fundId, fundName: fund.nickname, date, category, amount, requestedBy, purpose };
-
-    document.getElementById('pcv-form').classList.add('hidden');
-    const wrap = document.getElementById('pcv-preview-wrap');
-    wrap.classList.remove('hidden');
-    wrap.innerHTML = `
-      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
-        ${voucherStampHtml('Paid')}
-        ${voucherLetterheadHtml('Petty Cash Voucher', 'PCV No.', draft.number, 'Paid', 'Date', formatDate(draft.date))}
-        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
-          <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.fundName)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Category</p><p class="font-medium text-charcoal mt-0.5">${draft.category}</p></div>
-          <div><p class="text-xs text-muted uppercase">Requested By</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.requestedBy)}</p></div>
-          <div class="col-span-2"><p class="text-xs text-muted uppercase">Purpose</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.purpose)}</p></div>
-        </div>
-        ${voucherFooterHtml()}
-      </div>
-      <div id="pcv-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
-        <button type="button" id="pcv-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
-        <button type="button" id="pcv-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
-      </div>`;
-    refreshIcons();
-
-    document.getElementById('pcv-preview-back').addEventListener('click', () => {
-      wrap.classList.add('hidden');
-      wrap.innerHTML = '';
-      document.getElementById('pcv-form').classList.remove('hidden');
-    });
-    document.getElementById('pcv-preview-confirm').addEventListener('click', async () => {
-      const btn = document.getElementById('pcv-preview-confirm');
-      const perr = document.getElementById('pcv-preview-error');
-      perr.classList.add('hidden');
-      btn.disabled = true; btn.innerHTML = spinnerHtml();
-      try {
-        await createFinanceDoc('pettyCashVouchers', { ...draft, status: 'Paid', replenished: false });
-        navigateTo('disbursement/petty-cash');
-      } catch (err) {
-        console.error(err);
-        perr.textContent = 'Could not save this voucher. Please try again.';
-        perr.classList.remove('hidden');
-        btn.disabled = false; btn.textContent = 'Confirm & Submit';
-      }
-    });
-  });
-}
-async function renderPettyCashVouchersListPage(fundId) {
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let fund;
-  try {
-    fund = await fetchFinanceDoc('bankAccounts', fundId);
-  } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
-  if (!fund) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
-
-  contentWrap(`
-    <div class="mb-6 flex items-center justify-between flex-wrap gap-3">
-      <div>
-        <h1 class="text-xl font-semibold text-charcoal">Petty Cash Vouchers</h1>
-        <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)}</p>
-      </div>
-      <a href="#/disbursement/petty-cash/new-voucher/${fundId}" class="btn-primary text-sm">+ New Voucher</a>
-    </div>
-    <div id="pcv-list-container" class="text-sm text-muted">Loading...</div>`);
-  refreshIcons();
-  try {
-    const all = await fetchFinanceCollection('pettyCashVouchers');
-    const vouchers = all.filter(p => p.fundId === fundId);
-    document.getElementById('pcv-list-container').innerHTML = vouchers.length ? `
-      <div class="card overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-            <th class="px-4 py-3">PCV #</th><th class="px-4 py-3">PCV Request Date</th><th class="px-4 py-3">Category</th><th class="px-4 py-3">Purpose</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Replenishment</th><th class="px-4 py-3">Replenished Date</th>
-          </tr></thead>
-          <tbody>
-            ${vouchers.map(v => {
-              let replHtml;
-              if (v.replenished) {
-                replHtml = `<span class="inline-flex items-center gap-1 text-xs font-medium text-forest">${icon('check-circle', 'w-3.5 h-3.5')} Replenished</span>`;
-              } else if (v.replenishmentRequestId) {
-                replHtml = `<a href="#/disbursement/vouchers/view/${v.replenishmentRequestId}" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100">Requested — ${escapeAttr(v.replenishmentRequestNumber || '')}</a>`;
-              } else {
-                replHtml = '<span class="text-xs text-muted">—</span>';
-              }
-              const replDateHtml = v.replenished
-                ? `<p class="text-charcoal">${formatDate(v.replenishedDate)}</p>${v.replenishmentBatchNumber ? `<p class="text-xs text-muted">${escapeAttr(v.replenishmentBatchNumber)}</p>` : ''}`
-                : '<span class="text-xs text-muted">—</span>';
-              return `
-              <tr class="border-b border-borderc last:border-0">
-                <td class="px-4 py-3 font-medium text-charcoal">${v.number}</td>
-                <td class="px-4 py-3">${formatDate(v.date)}</td>
-                <td class="px-4 py-3">${v.category}</td>
-                <td class="px-4 py-3">${v.purpose || '—'}</td>
-                <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
-                <td class="px-4 py-3">${statusBadge(v.status)}</td>
-                <td class="px-4 py-3">${replHtml}</td>
-                <td class="px-4 py-3">${replDateHtml}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>` : `<div class="card flex items-center justify-center text-center py-10 text-sm text-muted">No vouchers logged yet for this fund.</div>`;
-    refreshIcons();
-  } catch (e) {
-    console.error(e);
-    document.getElementById('pcv-list-container').innerHTML = poLoadErrorHtml();
-  }
-}
-async function renderNewReplenishmentPage(fundId) {
-  if (!canApproveDisbursements()) {
-    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
-      <div class="w-14 h-14 rounded-full bg-cream flex items-center justify-center text-forest mb-4">${icon('shield-alert', 'w-6 h-6')}</div>
-      <h2 class="text-base font-medium text-charcoal">Replenishment requests are limited to Finance Manager and System Admin</h2>
-      <p class="text-sm text-muted mt-1.5 max-w-sm">If this fund needs replenishing, ask a Manager/Admin to submit the request.</p>
-      <a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a>
-    </div>`);
-    refreshIcons();
-    return;
-  }
-  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
-  let fund, unreplenished = [], realBankAccounts = [];
-  try {
-    const [fundData, all, banks] = await Promise.all([fetchFinanceDoc('bankAccounts', fundId), fetchFinanceCollection('pettyCashVouchers'), fetchActiveBankAccounts(true)]);
-    fund = fundData;
-    unreplenished = all.filter(p => p.fundId === fundId && p.status === 'Paid' && !p.replenished && !p.replenishmentRequestId);
-    realBankAccounts = banks.filter(b => b.accountType !== 'Cash');
-  } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
-  if (!fund) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Fund not found.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
-  if (!unreplenished.length) { contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Nothing to replenish.</p><p class="text-sm text-muted mt-1">Either every voucher is already replenished, or already part of a pending replenishment request.</p><a href="#/disbursement/petty-cash" class="mt-4 text-sm text-forest hover:underline">Back to Petty Cash</a></div>`); return; }
-
-  const breakdown = {};
-  unreplenished.forEach(p => { breakdown[p.category] = (breakdown[p.category] || 0) + (Number(p.amount) || 0); });
-  const breakdownArr = Object.entries(breakdown).map(([account, amount]) => ({ account, amount: Number(amount.toFixed(2)) }));
-  const total = breakdownArr.reduce((s, b) => s + b.amount, 0);
-
-  contentWrap(`
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-charcoal">Request Replenishment</h1>
-      <p class="text-sm text-muted mt-1">${escapeAttr(fund.nickname)} — ${unreplenished.length} unreplenished voucher(s)</p>
-    </div>
-    <div class="card p-5 mb-6 max-w-2xl">
-      <p class="text-xs text-muted uppercase mb-2">Breakdown</p>
-      ${breakdownArr.map(b => `<div class="flex justify-between text-sm py-1"><span>${b.account}</span><span>${formatCurrency(b.amount)}</span></div>`).join('')}
-      <div class="flex justify-between text-sm py-1 mt-2 border-t border-borderc font-semibold"><span>Total</span><span>${formatCurrency(total)}</span></div>
-    </div>
-    <form id="repl-form" class="card p-6 space-y-4 max-w-2xl">
-      <div id="repl-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        ${dateField('replDate', 'Date Requested', { required: true, value: todayISO() })}
-        ${modeOfPaymentFieldHtml('Cheque', '')}
-        ${bankAccountSelectHtml(realBankAccounts, null, { required: true })}
-      </div>
-      <p class="text-xs text-muted">This always goes through Encashment Batching — withdraw from a real bank/checking account, not another Cash Fund.</p>
-      <div class="flex items-center gap-3 pt-2 border-t border-borderc">
-        <button id="repl-preview-btn" type="button" class="btn-primary">Preview</button>
-        <a href="#/disbursement/petty-cash" class="text-sm text-muted hover:text-charcoal">Cancel</a>
-      </div>
-    </form>
-    <div id="repl-preview-wrap" class="hidden"></div>`);
-  refreshIcons();
-  wireModeOfPaymentToggle();
-
-  document.getElementById('repl-preview-btn').addEventListener('click', async () => {
-    const errBox = document.getElementById('repl-form-error');
-    errBox.classList.add('hidden');
-    const date = document.getElementById('field-replDate').value;
-    const modeOfPayment = document.getElementById('field-modeOfPayment').value;
-    const chequeNo = modeOfPayment === 'Cheque' ? document.getElementById('field-chequeNo').value.trim() : '';
-    const bankSel = document.getElementById('field-bankAccountId');
-    const bankAccountId = bankSel.value;
-    const bankAccountName = bankAccountId ? bankSel.options[bankSel.selectedIndex].text : '';
-
-    if (!date || !bankAccountId) {
-      errBox.textContent = 'Please fill in all required fields.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-    if (modeOfPayment === 'Cheque' && !chequeNo) {
-      errBox.textContent = 'Enter the Cheque No. — required when Mode of Payment is Cheque.';
-      errBox.classList.remove('hidden');
-      return;
-    }
-
-    const previewNumber = await generateSeriesNumber('disbursementVouchers', 'DV', 'number');
-    const draft = {
-      number: previewNumber, type: 'Petty Cash Replenishment', payee: fund.nickname, amount: total,
-      purpose: `Petty cash replenishment — ${fund.nickname}`, modeOfPayment, chequeNo, bankAccountId, bankAccountName,
-      accountTitle: breakdownArr.map(b => b.account).join(', '), accountTitleBreakdown: breakdownArr,
-      pcvIds: unreplenished.map(p => p.id), requestedBy: currentUser ? currentUser.email : null, dateRequested: date,
-    };
-
-    document.getElementById('repl-form').classList.add('hidden');
-    const wrap = document.getElementById('repl-preview-wrap');
-    wrap.classList.remove('hidden');
-    wrap.innerHTML = `
-      <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
-        ${voucherStampHtml('Pending')}
-        ${voucherLetterheadHtml('Petty Cash Replenishment', 'DV No.', draft.number, dvStatusLabel('Pending'), 'Date Requested', formatDate(draft.dateRequested))}
-        <div class="grid grid-cols-2 gap-4 text-sm mt-6">
-          <div><p class="text-xs text-muted uppercase">Fund</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.payee)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Total Amount</p><p class="font-semibold text-forest mt-0.5">${formatCurrency(draft.amount)}</p></div>
-          <div><p class="text-xs text-muted uppercase">Mode of Payment</p><p class="font-medium text-charcoal mt-0.5">${draft.modeOfPayment}</p></div>
-          ${draft.chequeNo ? `<div><p class="text-xs text-muted uppercase">Cheque No.</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.chequeNo)}</p></div>` : ''}
-          <div><p class="text-xs text-muted uppercase">Withdraw From</p><p class="font-medium text-charcoal mt-0.5">${escapeAttr(draft.bankAccountName)}</p></div>
-        </div>
-        <div class="mt-4 pt-4 border-t border-borderc">
-          <p class="text-xs text-muted uppercase mb-2">Breakdown</p>
-          ${breakdownArr.map(b => `<div class="flex justify-between text-sm py-1"><span>${b.account}</span><span>${formatCurrency(b.amount)}</span></div>`).join('')}
-        </div>
-        ${voucherFooterHtml()}
-      </div>
-      <div id="repl-preview-error" class="hidden max-w-2xl mx-auto mt-3 text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
-      <div class="max-w-2xl mx-auto mt-4 flex gap-3 print:hidden">
-        <button type="button" id="repl-preview-confirm" class="btn-primary text-sm">Confirm & Submit</button>
-        <button type="button" id="repl-preview-back" class="text-sm text-muted hover:text-charcoal">Back to Edit</button>
-      </div>`;
-    refreshIcons();
-
-    document.getElementById('repl-preview-back').addEventListener('click', () => {
-      wrap.classList.add('hidden');
-      wrap.innerHTML = '';
-      document.getElementById('repl-form').classList.remove('hidden');
-    });
-    document.getElementById('repl-preview-confirm').addEventListener('click', async () => {
-      const btn = document.getElementById('repl-preview-confirm');
-      const perr = document.getElementById('repl-preview-error');
-      perr.classList.add('hidden');
-      btn.disabled = true; btn.innerHTML = spinnerHtml();
-      try {
-        const dvRef = await createFinanceDoc('disbursementVouchers', { ...draft, status: 'Pending', requiresBatching: true });
-        for (const pcvId of draft.pcvIds) {
-          await updateFinanceDoc('pettyCashVouchers', pcvId, { replenishmentRequestId: dvRef.id, replenishmentRequestNumber: draft.number });
-        }
-        refreshApprovalsBadge();
-        navigateTo('disbursement/vouchers');
-      } catch (err) {
-        console.error(err);
-        perr.textContent = 'Could not submit this replenishment. Please try again.';
-        perr.classList.remove('hidden');
-        btn.disabled = false; btn.textContent = 'Confirm & Submit';
-      }
-    });
-  });
 }
 
 /* ---- Cash Advances ---- */
@@ -6944,7 +6528,7 @@ async function renderEncashmentSummaryPage() {
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">Encashment Summary</h1>
-      <p class="text-sm text-muted mt-1">Every processed encashment batch — replenishments, cash advance releases, and cash-fund payments.</p>
+      <p class="text-sm text-muted mt-1">Every processed encashment batch — cash advance releases and cash-fund payments.</p>
     </div>
     <div id="enc-summary-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
@@ -6968,10 +6552,7 @@ async function renderEncashmentSummaryPage() {
               <tbody>
                 ${(b.voucherRefs || []).map(v => `
                   <tr class="border-t border-borderc">
-                    <td class="py-1.5 text-charcoal">
-                      ${v.number} — ${v.type}
-                      ${v.pcvNumbers && v.pcvNumbers.length ? `<div class="text-muted mt-0.5">Covers: ${v.pcvNumbers.join(', ')}</div>` : ''}
-                    </td>
+                    <td class="py-1.5 text-charcoal">${v.number} — ${v.type}</td>
                     <td class="py-1.5 text-right w-28 align-top">${formatCurrency(v.amount)}</td>
                   </tr>`).join('')}
               </tbody>
@@ -7199,7 +6780,6 @@ async function renderActivityLogPage() {
 /* ---- Numbering (Settings) — editable prefix + resettable counter per series ---- */
 const NUMBERING_SERIES_DEFAULTS = [
   { key: 'DV', label: 'Disbursement Vouchers', defaultPrefix: 'DV' },
-  { key: 'PCV', label: 'Petty Cash Vouchers', defaultPrefix: 'PCV' },
   { key: 'CA', label: 'Cash Advances', defaultPrefix: 'CA' },
   { key: 'ENC', label: 'Encashment Batches', defaultPrefix: 'ENC' },
 ];
