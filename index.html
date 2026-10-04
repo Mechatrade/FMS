@@ -5974,6 +5974,8 @@ async function renderDisbursementVoucherDetailPage(id) {
   const runApproval = async (chequeNo) => {
     setBusy(true);
     try {
+      const shortfall = await cashFundShortfallMessage(v, 'approve');
+      if (shortfall) { errBox.textContent = shortfall; errBox.classList.remove('hidden'); setBusy(false); return; }
       const extra = chequeNo ? { chequeNo } : {};
       const datePaid = todayISO();
       await executeDisbursementVoucher({ ...v, ...extra, id, datePaid });
@@ -6003,6 +6005,8 @@ async function renderDisbursementVoucherDetailPage(id) {
   document.getElementById('dv-markpaid-btn')?.addEventListener('click', async () => {
     setBusy(true);
     try {
+      const shortfall = await cashFundShortfallMessage(v, 'mark it as paid');
+      if (shortfall) { errBox.textContent = shortfall; errBox.classList.remove('hidden'); setBusy(false); return; }
       const datePaid = todayISO();
       await executeDisbursementVoucher({ ...v, id, datePaid });
       await updateFinanceDoc('disbursementVouchers', id, { status: 'Paid', datePaid });
@@ -6167,6 +6171,54 @@ async function renderEditDisbursementVoucherPage(id) {
 }
 
 /* ---- Cash Advances ---- */
+// "Unliquidated" = money has been released and the advance hasn't been liquidated yet.
+function isUnliquidated(a) { return a.status === 'Outstanding' || a.status === 'Pending Liquidation Review'; }
+// Every unliquidated advance for one person, oldest first. Matches on the name as typed (ignoring case).
+function unliquidatedAdvancesFor(advances, name) {
+  const wanted = (name || '').trim().toLowerCase();
+  if (!wanted) return [];
+  return advances
+    .filter(a => (a.employeeName || '').trim().toLowerCase() === wanted && isUnliquidated(a))
+    .sort((a, b) => String(a.dateReleased || '').localeCompare(String(b.dateReleased || '')));
+}
+function unliquidatedAdvancesHtml(list) {
+  const total = list.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const rows = list.map(a => {
+    const days = a.dateReleased ? Math.round((new Date(todayISO()) - new Date(a.dateReleased)) / 86400000) : null;
+    return `<li class="flex flex-wrap items-center gap-x-2 py-1 border-t border-amber-200 first:border-0">
+      <a href="#/disbursement/cash-advances/view/${a.id}" target="_blank" rel="noopener" class="font-medium underline">${escapeAttr(a.number)}</a>
+      <span>${formatCurrency(a.amount)}</span>
+      <span>· ${escapeAttr(a.type || '—')}</span>
+      <span>· ${a.dateReleased ? 'released ' + formatDate(a.dateReleased) + (days != null ? ` (${days} day${days === 1 ? '' : 's'} ago)` : '') : 'not yet released'}</span>
+      <span>· ${escapeAttr(a.status)}</span>
+      ${isCAOverdue(a) ? '<span class="font-medium text-red-600">· overdue</span>' : ''}
+    </li>`;
+  }).join('');
+  return `<p class="font-medium">${escapeAttr(list[0].employeeName)} has ${list.length} unliquidated cash advance${list.length === 1 ? '' : 's'} (${formatCurrency(total)} in total):</p><ul class="mt-1">${rows}</ul>`;
+}
+// What the request form tells someone about the cash fund they picked: what it holds, what is already
+// waiting on it, and — if the advance doesn't fit — how much more the fund needs. (Requests can be
+// raised before the fund is topped up, so this is a heads-up; the hard check happens at approval.)
+function cashFundNote(name, balance, pending, amount) {
+  let text = `Available in ${name}: ${formatCurrency(balance)}`;
+  if (pending > 0) text += ` · already requested, awaiting approval: ${formatCurrency(pending)}`;
+  const short = pending + (Number(amount) || 0) - balance;
+  if (amount && short > 0.005) {
+    return { warn: true, text: `${text}. The fund needs ${formatCurrency(short)} more (via a Fund Transfer) before everything requested can be approved.` };
+  }
+  return { warn: false, text: text + '.' };
+}
+// A cash fund can't pay out more than it holds. Returns a message if paying this voucher would
+// overdraw its cash fund, otherwise null. Bank accounts are not checked.
+async function cashFundShortfallMessage(v, action) {
+  if (!v.bankAccountId) return null;
+  const acc = await fetchFinanceDoc('bankAccounts', v.bankAccountId);
+  if (!acc || acc.accountType !== 'Cash') return null;
+  const balances = await computeBankAccountBalances([{ ...acc, id: v.bankAccountId }]);
+  const balance = balances[v.bankAccountId] || 0;
+  if ((Number(v.amount) || 0) <= balance + 0.005) return null;
+  return `${acc.nickname} only holds ${formatCurrency(balance)}, which is less than this ${formatCurrency(v.amount)}. Top the fund up first with a Fund Transfer, then ${action}.`;
+}
 function isCAOverdue(ca) {
   if (ca.status !== 'Outstanding' || !ca.dateReleased) return false;
   return Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000) > CA_AGING_DAYS;
@@ -6190,7 +6242,16 @@ async function renderCashAdvancesPage() {
         <option value="">All Types</option>
         ${CA_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
       </select>
+      <select id="ca-status-filter" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Statuses</option>
+        <option value="unliquidated">Unliquidated (Outstanding + Pending Review)</option>
+        <option value="Pending Approval">Pending Approval</option>
+        <option value="Outstanding">Outstanding</option>
+        <option value="Pending Liquidation Review">Pending Liquidation Review</option>
+        <option value="Liquidated">Liquidated</option>
+      </select>
     </div>
+    <div id="ca-summary" class="text-sm text-muted mb-3"></div>
     <div id="ca-list-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
   let advances = [];
@@ -6203,7 +6264,16 @@ async function renderCashAdvancesPage() {
   }
   const renderFiltered = () => {
     const typeFilter = document.getElementById('ca-type-filter').value;
-    const filtered = typeFilter ? advances.filter(a => a.type === typeFilter) : advances;
+    const statusFilter = document.getElementById('ca-status-filter').value;
+    let filtered = advances.filter(a =>
+      (!typeFilter || a.type === typeFilter) &&
+      (!statusFilter || (statusFilter === 'unliquidated' ? isUnliquidated(a) : a.status === statusFilter)));
+    // The unliquidated view lists the longest-waiting advances first
+    if (statusFilter === 'unliquidated') filtered = [...filtered].sort((a, b) => String(a.dateReleased || '').localeCompare(String(b.dateReleased || '')));
+    const sumTotal = filtered.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    document.getElementById('ca-summary').innerHTML = filtered.length
+      ? `${filtered.length} cash advance${filtered.length === 1 ? '' : 's'} · Total <span class="font-medium text-charcoal">${formatCurrency(sumTotal)}</span>${statusFilter === 'unliquidated' ? ` · <span class="text-red-600">${filtered.filter(isCAOverdue).length} overdue</span>` : ''}`
+      : '';
     document.getElementById('ca-list-container').innerHTML = filtered.length ? `
       <div class="card overflow-x-auto">
         <table class="w-full text-sm">
@@ -6232,17 +6302,26 @@ async function renderCashAdvancesPage() {
   };
   renderFiltered();
   document.getElementById('ca-type-filter').addEventListener('change', renderFiltered);
+  document.getElementById('ca-status-filter').addEventListener('change', renderFiltered);
 }
 async function renderNewCashAdvancePage() {
   contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
   let bankAccounts = [], existingAdvances = [];
   try { bankAccounts = await fetchActiveBankAccounts(); } catch (e) { console.error(e); }
   try { existingAdvances = await fetchFinanceCollection('cashAdvances'); } catch (e) { console.error(e); }
+  // Cash fund balances, and what is already waiting on each fund (advance requests not yet approved)
+  let fundBalances = {}, pendingByAccount = {};
+  try { fundBalances = await computeBankAccountBalances(bankAccounts); } catch (e) { console.error(e); }
+  try {
+    (await fetchFinanceCollection('disbursementVouchers'))
+      .filter(x => x.type === 'Cash Advance Release' && x.status === 'Pending')
+      .forEach(x => { pendingByAccount[x.bankAccountId] = (pendingByAccount[x.bankAccountId] || 0) + (Number(x.amount) || 0); });
+  } catch (e) { console.error(e); }
 
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Cash Advance</h1>
-      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Once it is approved, the advance is released and becomes Outstanding.</p>
+      <p class="text-sm text-muted mt-1">Creates a Disbursement Voucher for approval. Once it is approved, the advance is released and becomes Outstanding. An advance paid from a cash fund can only be approved up to what the fund holds.</p>
     </div>
     <form id="ca-form" class="card p-6 space-y-4 max-w-2xl">
       <div id="ca-form-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
@@ -6267,20 +6346,26 @@ async function renderNewCashAdvancePage() {
   refreshIcons();
   wireModeOfPaymentToggle(bankAccounts);
 
+  const fundSelect = document.getElementById('field-bankAccountId');
+  const updateFundNote = () => {
+    let note = fundSelect.parentElement.querySelector('.fund-note');
+    if (!note) { note = document.createElement('p'); fundSelect.parentElement.appendChild(note); }
+    const acc = bankAccounts.find(b => b.id === fundSelect.value);
+    if (!acc || acc.accountType !== 'Cash') { note.className = 'fund-note hidden'; note.textContent = ''; return; }
+    const info = cashFundNote(acc.nickname, fundBalances[acc.id] || 0, pendingByAccount[acc.id] || 0, Number(document.getElementById('field-caAmount').value) || 0);
+    note.className = `fund-note text-xs mt-1.5 ${info.warn ? 'text-amber-700' : 'text-muted'}`;
+    note.textContent = info.text;
+  };
+  fundSelect.addEventListener('change', updateFundNote);
+  document.getElementById('field-caAmount').addEventListener('input', updateFundNote);
+  document.getElementById('field-modeOfPayment').addEventListener('change', updateFundNote);
+
   document.getElementById('field-caEmployeeName').addEventListener('blur', () => {
-    const name = document.getElementById('field-caEmployeeName').value.trim().toLowerCase();
     const warnBox = document.getElementById('ca-employee-warning');
-    if (!name) { warnBox.classList.add('hidden'); return; }
-    const existing = existingAdvances.find(a =>
-      (a.employeeName || '').trim().toLowerCase() === name &&
-      (a.status === 'Outstanding' || a.status === 'Pending Liquidation Review'));
-    if (existing) {
-      const daysOut = existing.dateReleased ? Math.round((new Date(todayISO()) - new Date(existing.dateReleased)) / 86400000) : null;
-      warnBox.textContent = `${existing.employeeName} already has an unliquidated advance: ${existing.number} — ${formatCurrency(existing.amount)}${daysOut != null ? `, released ${daysOut} day(s) ago` : ''} (${dvStatusLabel(existing.status)}).`;
-      warnBox.classList.remove('hidden');
-    } else {
-      warnBox.classList.add('hidden');
-    }
+    const list = unliquidatedAdvancesFor(existingAdvances, document.getElementById('field-caEmployeeName').value);
+    if (!list.length) { warnBox.classList.add('hidden'); warnBox.innerHTML = ''; return; }
+    warnBox.innerHTML = unliquidatedAdvancesHtml(list);
+    warnBox.classList.remove('hidden');
   });
 
   document.getElementById('ca-preview-btn').addEventListener('click', async () => {
