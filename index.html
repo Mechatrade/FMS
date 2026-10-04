@@ -270,6 +270,7 @@ const NAV = [
     description: "Disbursement vouchers, encashment batching, and cash advances.",
     children: [
       { name: "Disbursement Vouchers", path: "disbursement/vouchers", description: "Request and approve payment disbursements." },
+      { name: "Cheques for Encashment", path: "disbursement/cheques", description: "Approved cheque payments subject for encashment." },
       { name: "Encashment Batch", path: "disbursement/encashment-batch", description: "Group approved cash vouchers into one withdrawal." },
       { name: "Cash Advances", path: "disbursement/cash-advances", description: "Employee cash advance requests and liquidation." },
       { name: "Encashment Summary", path: "disbursement/encashment-summary", description: "Report of processed encashment batches." },
@@ -1134,6 +1135,7 @@ function renderRoute() {
   // Disbursement module — real pages instead of placeholders
   const disbursementPages = {
     'disbursement/vouchers': renderDisbursementVouchersPage,
+    'disbursement/cheques': renderChequesForEncashmentPage,
     'disbursement/encashment-batch': renderEncashmentBatchPage,
     'disbursement/cash-advances': renderCashAdvancesPage,
     'disbursement/encashment-summary': renderEncashmentSummaryPage,
@@ -5223,6 +5225,85 @@ async function renderDisbursementVouchersPage() {
     console.error(e);
     document.getElementById('dv-list-container').innerHTML = poLoadErrorHtml();
   }
+}
+
+/* ---- Cheques for Encashment: approved cheque payments waiting to be encashed by the payee ---- */
+// Every Cheque voucher that has been approved (so it has a cheque number). A voucher that was never
+// approved, or was cancelled, has no cheque to encash and isn't listed.
+function selectEncashmentCheques(vouchers) {
+  return vouchers
+    .filter(v => v.modeOfPayment === 'Cheque' && v.chequeNo && (v.status === 'Approved' || v.status === 'Paid')
+      && !(isRetiredDVType(v.type) && v.status !== 'Paid'))
+    .sort((a, b) => String(b.dateApproved || '').localeCompare(String(a.dateApproved || '')));
+}
+async function renderChequesForEncashmentPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Cheques for Encashment</h1>
+      <p class="text-sm text-muted mt-1">Approved cheque payments — the cheques subject for encashment by the payee. This is separate from Encashment Batch, which groups cash withdrawals.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <input id="chq-search" type="text" placeholder="Search cheque no., payee or DV #..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="chq-bank" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+        <option value="">All Bank Accounts</option>
+      </select>
+    </div>
+    <div id="chq-summary" class="text-sm text-muted mb-3"></div>
+    <div id="chq-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+
+  let cheques = [];
+  try {
+    cheques = selectEncashmentCheques(await fetchFinanceCollection('disbursementVouchers'));
+  } catch (e) {
+    console.error(e);
+    document.getElementById('chq-container').innerHTML = poLoadErrorHtml();
+    return;
+  }
+
+  const banks = {};
+  cheques.forEach(v => { if (v.bankAccountId) banks[v.bankAccountId] = v.bankAccountName || v.bankAccountId; });
+  document.getElementById('chq-bank').insertAdjacentHTML('beforeend',
+    Object.entries(banks).map(([id, name]) => `<option value="${id}">${escapeAttr(name)}</option>`).join(''));
+
+  const renderFiltered = () => {
+    const q = document.getElementById('chq-search').value.trim().toLowerCase();
+    const bank = document.getElementById('chq-bank').value;
+    const rows = cheques.filter(v =>
+      (!bank || v.bankAccountId === bank) &&
+      (!q || [v.chequeNo, v.payee, v.number].some(x => String(x || '').toLowerCase().includes(q))));
+    const total = rows.reduce((s, v) => s + (Number(v.amount) || 0), 0);
+    document.getElementById('chq-summary').innerHTML = rows.length
+      ? `${rows.length} cheque${rows.length === 1 ? '' : 's'} · Total <span class="font-medium text-charcoal">${formatCurrency(total)}</span>`
+      : '';
+    document.getElementById('chq-container').innerHTML = rows.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Cheque No.</th><th class="px-4 py-3">DV #</th><th class="px-4 py-3">Payee</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Bank Account</th><th class="px-4 py-3">Date Approved</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(v => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(v.chequeNo)}${Array.isArray(v.chequeHistory) && v.chequeHistory.length ? ' <span class="ml-1 text-xs font-normal text-amber-700">reissued</span>' : ''}</td>
+                <td class="px-4 py-3">${v.number}</td>
+                <td class="px-4 py-3">${escapeAttr(v.payee) || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(v.amount)}</td>
+                <td class="px-4 py-3">${escapeAttr(v.bankAccountName) || '—'}</td>
+                <td class="px-4 py-3">${formatDate(v.dateApproved)}</td>
+                <td class="px-4 py-3">${dvStatusBadge(v.status)}</td>
+                <td class="px-4 py-3 text-right"><a href="#/disbursement/vouchers/view/${v.id}" class="btn-glass-sm">View</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex flex-col items-center justify-center text-center py-16 px-6">
+        <p class="text-sm text-muted">${cheques.length ? 'No cheques match your search.' : 'No approved cheque payments yet.'}</p>
+      </div>`;
+    refreshIcons();
+  };
+  renderFiltered();
+  document.getElementById('chq-search').addEventListener('input', renderFiltered);
+  document.getElementById('chq-bank').addEventListener('change', renderFiltered);
 }
 
 /* ---- Disbursement Vouchers: request (Regular Payment only — Cash Advance Release is created from its own page) ---- */
