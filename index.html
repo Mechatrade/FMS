@@ -2585,16 +2585,18 @@ const EXPENSE_ACCOUNTS = STANDARD_COA.filter(a => EXPENSE_ACCOUNT_TYPES.includes
 const CASH_OFFSET_ACCOUNTS = ACCOUNTS_CHART.filter(a => !CASH_LIKE_ACCOUNTS.includes(a));
 const TAX_TYPES = ['VAT', 'Withholding Tax', 'Percentage Tax'];
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Check', 'Online Payment', 'Other'];
-const MODE_OF_PAYMENT_OPTIONS = ['Cash', 'Cheque', 'Debit Memo', 'Others'];
+const MODE_OF_PAYMENT_OPTIONS = ['Cheque', 'Debit Memo', 'Online Banking', 'Others'];
 function modeOfPaymentFieldHtml(selectedMode) {
+  const current = selectedMode || MODE_OF_PAYMENT_OPTIONS[0];
+  const options = MODE_OF_PAYMENT_OPTIONS.includes(current) ? MODE_OF_PAYMENT_OPTIONS : [current, ...MODE_OF_PAYMENT_OPTIONS];
   return `
     <div>
       <label class="block text-sm font-medium text-charcoal mb-1.5">Mode of Payment <span class="text-red-500">*</span></label>
       <select id="field-modeOfPayment" required class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
-        ${MODE_OF_PAYMENT_OPTIONS.map(o => `<option value="${o}" ${selectedMode === o ? 'selected' : ''}>${o}</option>`).join('')}
+        ${options.map(o => `<option value="${o}" ${current === o ? 'selected' : ''}>${o}</option>`).join('')}
       </select>
     </div>
-    <div id="mop-cheque-wrap" class="${selectedMode === 'Cheque' ? '' : 'hidden'}">
+    <div id="mop-cheque-wrap" class="${current === 'Cheque' ? '' : 'hidden'}">
       <div class="h-full flex items-end">
         <p class="text-xs text-muted pb-3">The Cheque No. is entered by the approver when this request is approved.</p>
       </div>
@@ -2631,9 +2633,6 @@ function wireModeBankFilter(accounts) {
       text = canAccess('cash-management')
         ? 'No Cash fund available. Add a Cash-type account under Cash Management → Bank Accounts.'
         : 'No Cash fund available. Ask a System Admin or Finance Manager to add one.';
-      tone = 'text-amber-700';
-    } else if (currentProfile && currentProfile.role === 'custodian') {
-      text = 'Cheque, Debit Memo and Other payments use bank accounts, which aren\'t available to your role.';
       tone = 'text-amber-700';
     } else {
       text = 'No bank account available. Add a Checking or Savings account under Cash Management → Bank Accounts.';
@@ -4532,13 +4531,9 @@ function maskAccountNumber(num) {
 }
 async function fetchActiveBankAccounts() {
   const all = await fetchFinanceCollection('bankAccounts');
-  const active = all.filter(b => b.status !== 'Inactive');
-  // Custodian sees/chooses Cash-type funds only, everywhere — never a
-  // Checking/Savings account.
-  if (currentProfile && currentProfile.role === 'custodian') {
-    return active.filter(b => b.accountType === 'Cash');
-  }
-  return active;
+  // Every role that can raise a request sees the active accounts. (The Custodian used to be limited to
+  // Cash funds, but with Cash no longer a Mode of Payment that left nothing to choose.)
+  return all.filter(b => b.status !== 'Inactive');
 }
 function bankAccountSelectHtml(bankAccounts, selectedId, opts = {}) {
   return `
