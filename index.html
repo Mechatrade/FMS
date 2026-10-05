@@ -715,9 +715,9 @@ async function refreshApprovalsBadge() {
   }
   refreshNotificationBell();
 }
-let notificationCache = { pendingDVs: [], recentSalesOrders: [], overdueAdvances: [] };
+let notificationCache = { pendingDVs: [], recentSalesOrders: [], overdueAdvances: [], liquidationReviews: [] };
 function notificationPanelBodyHtml() {
-  const { pendingDVs, recentSalesOrders, overdueAdvances } = notificationCache;
+  const { pendingDVs, recentSalesOrders, overdueAdvances, liquidationReviews } = notificationCache;
   const approvalsSection = canApproveDisbursements() ? `
     <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Approvals</p></div>
     ${pendingDVs.length ? pendingDVs.slice(0, 6).map(v => `
@@ -725,6 +725,16 @@ function notificationPanelBodyHtml() {
         <p class="text-sm text-charcoal">${v.number} — ${escapeAttr(v.payee || v.type)}</p>
         <p class="text-xs text-muted">${formatCurrency(v.amount)} · awaiting your approval</p>
       </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">Nothing pending approval.</p>`}` : '';
+  const liquidationSection = canApproveDisbursements() ? `
+    <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Liquidations for Review</p></div>
+    ${liquidationReviews.length ? liquidationReviews.map(ca => {
+      const p = ca.liquidationPending || {};
+      return `
+      <a href="#/disbursement/cash-advances/view/${ca.id}" class="block px-3 py-2 hover:bg-cream border-b border-borderc">
+        <p class="text-sm text-charcoal">${ca.number} — ${escapeAttr(ca.employeeName)}</p>
+        <p class="text-xs text-muted">${formatCurrency(ca.amount)} advance · ${formatCurrency(p.totalLiquidated || 0)} itemized${p.dateLiquidated ? ' · submitted ' + formatDate(p.dateLiquidated) : ''} · awaiting your review</p>
+      </a>`;
+    }).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">No liquidations waiting.</p>`}` : '';
   const overdueSection = canApproveDisbursements() ? `
     <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">Overdue Cash Advances</p></div>
     ${overdueAdvances.length ? overdueAdvances.map(ca => `
@@ -739,8 +749,8 @@ function notificationPanelBodyHtml() {
         <p class="text-sm text-charcoal">${escapeAttr(so.controlNo || so.orderNo || 'Sales Order')} — ${escapeAttr((so.billedTo && so.billedTo.name) || 'Unknown Client')}</p>
         <p class="text-xs text-muted">${so.total != null ? formatCurrency(so.total) + ' · ' : ''}Pull into a Client PO</p>
       </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted">No recent sales orders.</p>`}` : '';
-  if (!approvalsSection && !overdueSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
-  return approvalsSection + overdueSection + crmSection;
+  if (!approvalsSection && !liquidationSection && !overdueSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
+  return approvalsSection + liquidationSection + overdueSection + crmSection;
 }
 async function refreshNotificationBell() {
   const badgeEl = document.getElementById('notif-badge');
@@ -748,6 +758,7 @@ async function refreshNotificationBell() {
   if (!badgeEl) return;
   let pendingDVs = [];
   let overdueAdvances = [];
+  let liquidationReviews = [];
   if (canApproveDisbursements()) {
     try {
       const vouchers = await fetchFinanceCollection('disbursementVouchers');
@@ -756,6 +767,7 @@ async function refreshNotificationBell() {
     try {
       const advances = await fetchFinanceCollection('cashAdvances');
       overdueAdvances = advances.filter(isCAOverdue);
+      liquidationReviews = advances.filter(a => a.status === 'Pending Liquidation Review');
     } catch (e) { console.error(e); }
   }
   let recentSalesOrders = [];
@@ -764,10 +776,10 @@ async function refreshNotificationBell() {
       recentSalesOrders = await fetchRecentCRMSalesOrders(5);
     } catch (e) { console.error(e); }
   }
-  notificationCache = { pendingDVs, recentSalesOrders, overdueAdvances };
+  notificationCache = { pendingDVs, recentSalesOrders, overdueAdvances, liquidationReviews };
   const recentCutoffMs = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const newSalesOrderCount = recentSalesOrders.filter(so => salesOrderTimestampMs(so) >= recentCutoffMs).length;
-  const total = pendingDVs.length + overdueAdvances.length + newSalesOrderCount;
+  const total = pendingDVs.length + liquidationReviews.length + overdueAdvances.length + newSalesOrderCount;
   badgeEl.innerHTML = total > 0 ? `<span class="nav-badge" style="position:absolute;top:2px;right:2px;">${total}</span>` : '';
   if (bodyEl) { bodyEl.innerHTML = notificationPanelBodyHtml(); refreshIcons(); }
 }
@@ -929,6 +941,20 @@ function renderRoute() {
     buildBreadcrumb(NAV.find(n => n.path === 'finance'), { name: 'Record Payment' });
     renderARPaymentPage(arId);
     return;
+  }
+  // Viewing a single invoice or official receipt (not in NAV — reached from the Billing & Collection lists)
+  const billingViewRoutes = [
+    { prefix: 'billing/invoices/view/', fn: renderInvoiceViewPage, highlight: 'billing/invoices', label: 'Invoice' },
+    { prefix: 'billing/official-receipts/view/', fn: renderOfficialReceiptViewPage, highlight: 'billing/official-receipts', label: 'Official Receipt' },
+  ];
+  for (const r of billingViewRoutes) {
+    if (path.startsWith(r.prefix)) {
+      if (!canAccess('billing')) { renderNoAccess('Billing & Collection'); buildBreadcrumb(null, null); return; }
+      setActiveNav(r.highlight, NAV.find(n => n.path === 'billing'));
+      buildBreadcrumb(NAV.find(n => n.path === 'billing'), { name: r.label });
+      r.fn(path.substring(r.prefix.length));
+      return;
+    }
   }
   // AP/Expense/Tax payments now go through Disbursement Vouchers
   // (see disbursement/vouchers/new/... routes below) — no direct-pay route.
@@ -1116,6 +1142,19 @@ function renderRoute() {
   };
   if (financePages[path]) {
     financePages[path]();
+    return;
+  }
+
+  // Billing & Collection module — real pages instead of placeholders
+  const billingPages = {
+    'billing/invoices': renderInvoicesPage,
+    'billing/unbilled-fulfillment': renderUnbilledFulfillmentPage,
+    'billing/collections': renderCollectionsPage,
+    'billing/official-receipts': renderOfficialReceiptsPage,
+    'billing/ar-aging': renderARAgingPage,
+  };
+  if (billingPages[path]) {
+    billingPages[path]();
     return;
   }
 
@@ -2633,7 +2672,8 @@ async function renderSalesRecognitionPage() {
             source: 'sales-recognition', poId, salesRecognitionId: srRef.id,
             clientPONumber, clientName, description: `Sales Recognition — ${clientPONumber}`,
             amount, amountPaid: 0, balance: amount, status: 'Unpaid',
-            dateCreated: dateRecognized, dueDate: '', payments: [],
+            dateCreated: dateRecognized, dueDate: arDueDate({ dateCreated: dateRecognized }, allPOs.find(p => p.id === poId)),
+            paymentTerms: (allPOs.find(p => p.id === poId) || {}).paymentTerms || '', payments: [],
           });
           await postGLEntries([
             { date: dateRecognized, account: 'Accounts Receivable', debit: amount, credit: 0, description: `Sales Recognition — ${clientPONumber} (${clientName})`, sourceType: 'sales-recognition', sourceId: srRef.id },
@@ -2842,7 +2882,17 @@ async function renderARPaymentPage(id) {
         { date: payDate, account: cashAccountName, debit: payAmount, credit: 0, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id, bankAccountId: bankAccountId || null },
         { date: payDate, account: 'Accounts Receivable', debit: 0, credit: payAmount, description: `Payment received — ${ar.clientName}${ar.clientPONumber ? ' (' + ar.clientPONumber + ')' : ''}`, sourceType: 'ar-payment', sourceId: id },
       ]);
-      navigateTo('finance/accounts-receivable');
+      // Issue the Official Receipt. If this step fails the payment stays recorded, and the receipt can
+      // be issued later from Billing & Collection → Official Receipts.
+      let orId = null;
+      try {
+        const lastPayment = payments[payments.length - 1];
+        const or = await createOfficialReceipt({ ...ar, id }, id, lastPayment, newBalance);
+        payments[payments.length - 1] = { ...lastPayment, orId: or.id, orNumber: or.number };
+        await updateFinanceDoc('accountsReceivable', id, { payments });
+        orId = or.id;
+      } catch (orErr) { console.error(orErr); }
+      navigateTo(orId && canAccess('billing') ? 'billing/official-receipts/view/' + orId : 'finance/accounts-receivable');
     } catch (err) {
       console.error(err);
       errBox.textContent = 'Could not record this payment. Please try again.';
@@ -4996,7 +5046,7 @@ function canApproveDisbursements(amount) {
   }
   return false;
 }
-const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'cashAdvances': 'CA' };
+const NUMBERING_SERIES_KEYS = { 'disbursementVouchers': 'DV', 'cashAdvances': 'CA', 'officialReceipts': 'OR' };
 async function getNumberingConfig(seriesKey, defaultPrefix) {
   let cfg;
   try {
@@ -6298,6 +6348,661 @@ async function renderEditDisbursementVoucherPage(id) {
   });
 }
 
+/* ==========================================================================
+   BILLING & COLLECTION — Unbilled Fulfillment, Invoices, Collections, Official Receipts, AR Aging
+   ========================================================================== */
+
+// ---- dates (all in UTC so the Philippine timezone can't shift a day) ----
+function addDaysISO(iso, days) {
+  const t = Date.parse(iso + 'T00:00:00Z');
+  if (!Number.isFinite(t)) return '';
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+function daysBetweenISO(fromISO, toISO) {
+  const a = Date.parse(fromISO + 'T00:00:00Z'), b = Date.parse(toISO + 'T00:00:00Z');
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 86400000) : null;
+}
+// Latest date found in free text such as "12 Sep 2026 (partial), 20 Sep 2026 (final)". ISO, or '' if none.
+function latestDateIn(text) {
+  const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  const pad = (n) => String(n).padStart(2, '0');
+  const s = String(text || '');
+  const found = s.match(/\d{4}-\d{2}-\d{2}/g) || [];
+  let m;
+  const dayFirst = /(\d{1,2})\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})/g;
+  while ((m = dayFirst.exec(s))) {
+    const mo = MONTHS[m[2].slice(0, 3).toLowerCase()];
+    if (mo) found.push(`${m[3]}-${pad(mo)}-${pad(m[1])}`);
+  }
+  const monthFirst = /([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})/g;
+  while ((m = monthFirst.exec(s))) {
+    const mo = MONTHS[m[1].slice(0, 3).toLowerCase()];
+    if (mo) found.push(`${m[3]}-${pad(mo)}-${pad(m[2])}`);
+  }
+  return found.sort().pop() || '';
+}
+
+// ---- amount in words, for the Official Receipt ----
+function amountInWords(amount) {
+  const total = Math.round((Number(amount) || 0) * 100);
+  const pesos = Math.floor(total / 100), cents = total % 100;
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const underThousand = (n) => {
+    const parts = [];
+    if (n >= 100) { parts.push(ones[Math.floor(n / 100)] + ' Hundred'); n %= 100; }
+    if (n >= 20) parts.push(tens[Math.floor(n / 10)] + (n % 10 ? '-' + ones[n % 10] : ''));
+    else if (n > 0) parts.push(ones[n]);
+    return parts.join(' ');
+  };
+  const scales = ['', ' Thousand', ' Million', ' Billion', ' Trillion'];
+  let words = '', n = pesos, i = 0;
+  if (n === 0) words = 'Zero';
+  while (n > 0) {
+    const chunk = n % 1000;
+    if (chunk) words = underThousand(chunk) + scales[i] + (words ? ' ' + words : '');
+    n = Math.floor(n / 1000); i++;
+  }
+  return `${words} ${pesos === 1 ? 'Peso' : 'Pesos'}${cents ? ` and ${String(cents).padStart(2, '0')}/100` : ''} Only`;
+}
+
+// ---- when a receivable is due, and how old it is ----
+// Days of credit the PO gives: "Net 30" -> 30, Custom -> the number entered. COD, advance payment, or no terms: 0.
+function poTermsDays(po) {
+  if (!po || po.paymentTermsType !== 'Terms') return 0;
+  const raw = po.paymentTermsDays === 'Custom' ? po.customPaymentDays : po.paymentTermsDays;
+  const n = parseInt(String(raw == null ? '' : raw).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+// The due date on the record, else worked out from the PO's payment terms (counted from the invoice date).
+function arDueDate(ar, po) {
+  if (ar.dueDate) return ar.dueDate;
+  return ar.dateCreated ? addDaysISO(ar.dateCreated, poTermsDays(po)) : '';
+}
+function arDaysOverdue(ar, po, today) {
+  const due = arDueDate(ar, po);
+  const d = due ? daysBetweenISO(due, today) : 0;
+  return d && d > 0 ? d : 0;
+}
+// Balance on a given date, rebuilt from the payment history so the aging report can look back.
+function arBalanceAsOf(ar, asOf) {
+  if (ar.dateCreated && ar.dateCreated > asOf) return 0;
+  const paid = (Array.isArray(ar.payments) ? ar.payments : [])
+    .filter(p => p.date && p.date <= asOf)
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  return Math.max(0, Number(((Number(ar.amount) || 0) - paid).toFixed(2)));
+}
+const AGING_BUCKETS = ['Current', '1–30 days', '31–60 days', '61–90 days', 'Over 90 days'];
+function agingBucketIndex(daysPastDue) {
+  if (daysPastDue == null || daysPastDue <= 0) return 0;
+  if (daysPastDue <= 30) return 1;
+  if (daysPastDue <= 60) return 2;
+  if (daysPastDue <= 90) return 3;
+  return 4;
+}
+function buildARAging(receivables, poById, asOf) {
+  const byClient = {};
+  const totals = [0, 0, 0, 0, 0];
+  receivables.forEach(ar => {
+    const bal = arBalanceAsOf(ar, asOf);
+    if (bal <= 0.005) return;
+    const due = arDueDate(ar, poById[ar.poId]);
+    const b = agingBucketIndex(due ? daysBetweenISO(due, asOf) : 0);
+    const key = ar.clientName || '—';
+    const row = byClient[key] || (byClient[key] = { client: key, buckets: [0, 0, 0, 0, 0], total: 0, count: 0 });
+    row.buckets[b] += bal; row.total += bal; row.count += 1; totals[b] += bal;
+  });
+  const rows = Object.values(byClient).sort((a, b) => b.total - a.total);
+  return { rows, totals, grand: totals.reduce((s, x) => s + x, 0) };
+}
+
+// ---- unbilled fulfillment: delivered, but not yet recognized as a sale ----
+const UNBILLED_STATUSES = ['Ready for Billing', 'Complete Delivery', 'Partial Delivery'];
+function selectUnbilledFulfillment(pos) {
+  return pos
+    .filter(p => !p.salesRecognized && UNBILLED_STATUSES.includes(p.status))
+    .sort((a, b) => UNBILLED_STATUSES.indexOf(a.status) - UNBILLED_STATUSES.indexOf(b.status)
+      || (Number(b.poAmount) || 0) - (Number(a.poAmount) || 0));
+}
+
+// ---- collections follow-ups ----
+function lastFollowUp(ar) {
+  const notes = Array.isArray(ar.collectionNotes) ? ar.collectionNotes : [];
+  return notes.length ? notes[notes.length - 1] : null;
+}
+// 'due' = the agreed next follow-up date has come; 'none' = overdue and nobody has chased it yet
+function followUpState(ar, daysOverdue, today) {
+  const last = lastFollowUp(ar);
+  if (!last) return daysOverdue > 0 ? 'none' : 'ok';
+  return last.nextFollowUp && last.nextFollowUp <= today ? 'due' : 'ok';
+}
+
+// ---- Official Receipts ----
+async function createOfficialReceipt(ar, arId, payment, balanceAfter) {
+  const number = await generateSeriesNumber('officialReceipts', 'OR');
+  const ref = await createFinanceDoc('officialReceipts', {
+    number, arId, poId: ar.poId || null,
+    clientName: ar.clientName || '', reference: ar.clientPONumber || ar.description || '',
+    amount: Number(payment.amount) || 0, date: payment.date, method: payment.method || '',
+    bankAccountId: payment.bankAccountId || null, bankAccountName: payment.bankAccountName || '',
+    notes: payment.notes || '', balanceAfter,
+    issuedBy: currentUser ? currentUser.email : null,
+  });
+  return { id: ref.id, number };
+}
+// For payments recorded before Official Receipts existed (or whose receipt failed to issue).
+async function issueOfficialReceiptForPayment(arId, paymentIndex) {
+  const ar = await fetchFinanceDoc('accountsReceivable', arId);
+  const payments = Array.isArray(ar && ar.payments) ? [...ar.payments] : [];
+  const p = payments[paymentIndex];
+  if (!p) throw new Error('Payment not found');
+  if (p.orId) return { id: p.orId, number: p.orNumber };
+  const paidThrough = payments.slice(0, paymentIndex + 1).reduce((s, x) => s + (Number(x.amount) || 0), 0);
+  const balanceAfter = Math.max(0, Number(((Number(ar.amount) || 0) - paidThrough).toFixed(2)));
+  const or = await createOfficialReceipt(ar, arId, p, balanceAfter);
+  payments[paymentIndex] = { ...p, orId: or.id, orNumber: or.number };
+  await updateFinanceDoc('accountsReceivable', arId, { payments });
+  return or;
+}
+
+function billingSearchInputHtml(id, placeholder) {
+  return `<input id="${id}" type="text" placeholder="${placeholder}" class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />`;
+}
+const BILLING_SELECT_CLS = 'rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+
+/* ---- Unbilled Fulfillment ---- */
+async function renderUnbilledFulfillmentPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Unbilled Fulfillment</h1>
+      <p class="text-sm text-muted mt-1">Delivered work that hasn't been billed yet. POs marked <span class="font-medium">Ready for Billing</span> can be recognized as sales now; the others are still being delivered, or haven't been marked ready in Client Orders.</p>
+    </div>
+    <div id="ub-summary" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6"></div>
+    <div id="ub-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  let rows = [];
+  try { rows = selectUnbilledFulfillment(await fetchClientPOs()); }
+  catch (e) { console.error(e); document.getElementById('ub-container').innerHTML = poLoadErrorHtml(); return; }
+  const today = todayISO();
+  const of = (s) => rows.filter(p => p.status === s);
+  const total = (list) => list.reduce((t, p) => t + (Number(p.poAmount) || 0), 0);
+  const card = (label, status, tone) => `
+    <div class="card p-4"><p class="text-xs text-muted uppercase">${label}</p>
+      <p class="text-lg font-semibold ${tone} mt-1">${formatCurrency(total(of(status)))}</p>
+      <p class="text-xs text-muted mt-0.5">${of(status).length} PO${of(status).length === 1 ? '' : 's'}</p></div>`;
+  document.getElementById('ub-summary').innerHTML =
+    card('Ready for Billing', 'Ready for Billing', 'text-forest') +
+    card('Delivered — not yet marked ready', 'Complete Delivery', 'text-charcoal') +
+    card('Partially delivered', 'Partial Delivery', 'text-charcoal');
+  document.getElementById('ub-container').innerHTML = rows.length ? `
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Client PO #</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">PO Status</th><th class="px-4 py-3">Delivered</th><th class="px-4 py-3">Waiting</th><th class="px-4 py-3 text-right">Action</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(po => {
+            const last = latestDateIn(po.datesDelivered);
+            const waiting = last ? daysBetweenISO(last, today) : null;
+            return `
+            <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+              <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(po.clientPONumber) || '—'}</td>
+              <td class="px-4 py-3">${escapeAttr(po.clientName) || '—'}</td>
+              <td class="px-4 py-3">${formatCurrency(po.poAmount)}</td>
+              <td class="px-4 py-3">${statusBadge(po.status)}</td>
+              <td class="px-4 py-3">${escapeAttr(po.datesDelivered) || '—'}</td>
+              <td class="px-4 py-3">${waiting != null && waiting >= 0 ? waiting + ' day' + (waiting === 1 ? '' : 's') : '—'}</td>
+              <td class="px-4 py-3 text-right">${po.status === 'Ready for Billing'
+                ? '<a href="#/finance/sales-recognition" class="btn-glass-sm">Recognize Sale</a>'
+                : `<a href="#/client-orders/view/${po.id}" class="btn-glass-sm">View PO</a>`}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>` : `<div class="card flex items-center justify-center text-center py-16 px-6 text-sm text-muted">Nothing unbilled — every delivered PO has been recognized as a sale.</div>`;
+  refreshIcons();
+}
+
+/* ---- Invoices ---- */
+async function renderInvoicesPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Invoices</h1>
+      <p class="text-sm text-muted mt-1">Every recognized sale and what has been collected on it. Open one to view or print the invoice. The Invoice No. is the Sales Invoice No. recorded on the Client PO.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      ${billingSearchInputHtml('inv-search', 'Search client, PO # or invoice no...')}
+      <select id="inv-status" class="${BILLING_SELECT_CLS}">
+        <option value="">All Statuses</option><option value="Unpaid">Unpaid</option><option value="Partially Paid">Partially Paid</option><option value="Paid">Paid</option><option value="Overdue">Overdue</option>
+      </select>
+    </div>
+    <div id="inv-summary" class="text-sm text-muted mb-3"></div>
+    <div id="inv-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  let receivables = [], poById = {};
+  try {
+    const [ars, pos] = await Promise.all([fetchFinanceCollection('accountsReceivable'), fetchClientPOs()]);
+    receivables = ars.filter(a => a.source === 'sales-recognition')
+      .sort((a, b) => String(b.dateCreated || '').localeCompare(String(a.dateCreated || '')));
+    pos.forEach(p => { poById[p.id] = p; });
+  } catch (e) { console.error(e); document.getElementById('inv-container').innerHTML = poLoadErrorHtml(); return; }
+  const today = todayISO();
+  const render = () => {
+    const q = document.getElementById('inv-search').value.trim().toLowerCase();
+    const st = document.getElementById('inv-status').value;
+    const rows = receivables.map(a => {
+      const po = poById[a.poId];
+      const overdue = arDaysOverdue(a, po, today) > 0 && (Number(a.balance) || 0) > 0.005;
+      return { a, po, due: arDueDate(a, po), overdue, invNo: (po && po.salesInvoiceNo) || '' };
+    }).filter(r =>
+      (!st || (st === 'Overdue' ? r.overdue : r.a.status === st)) &&
+      (!q || [r.a.clientName, r.a.clientPONumber, r.invNo].some(x => String(x || '').toLowerCase().includes(q))));
+    const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+    const overdueRows = rows.filter(r => r.overdue);
+    document.getElementById('inv-summary').innerHTML = rows.length ? `
+      <span>${rows.length} invoice${rows.length === 1 ? '' : 's'} · Invoiced <span class="font-medium text-charcoal">${formatCurrency(sum(r => Number(r.a.amount) || 0))}</span></span>
+      <span class="mx-2">|</span><span>Outstanding <span class="font-medium text-charcoal">${formatCurrency(sum(r => Number(r.a.balance) || 0))}</span></span>
+      <span class="mx-2">·</span><span class="text-red-600">Overdue ${formatCurrency(overdueRows.reduce((s, r) => s + (Number(r.a.balance) || 0), 0))} (${overdueRows.length})</span>` : '';
+    document.getElementById('inv-container').innerHTML = rows.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Invoice No.</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Client PO #</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Due</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Balance</th><th class="px-4 py-3">Status</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(r.invNo) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(r.a.clientName) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(r.a.clientPONumber) || '—'}</td>
+                <td class="px-4 py-3">${formatDate(r.a.dateCreated)}</td>
+                <td class="px-4 py-3">${formatDate(r.due)}${r.overdue ? ' <span class="text-xs text-red-600">overdue</span>' : ''}</td>
+                <td class="px-4 py-3">${formatCurrency(r.a.amount)}</td>
+                <td class="px-4 py-3 font-medium">${formatCurrency(r.a.balance)}</td>
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${arStatusBadgeClass(r.a.status)}">${r.a.status}</span></td>
+                <td class="px-4 py-3 text-right"><a href="#/billing/invoices/view/${r.a.id}" class="btn-glass-sm">View</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 px-6 text-sm text-muted">${receivables.length ? 'No invoices match your filters.' : 'No sales recognized yet. Invoices appear here once a sale is recognized.'}</div>`;
+    refreshIcons();
+  };
+  render();
+  document.getElementById('inv-search').addEventListener('input', render);
+  document.getElementById('inv-status').addEventListener('change', render);
+}
+
+async function renderInvoiceViewPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let ar = null, po = null;
+  try {
+    ar = await fetchFinanceDoc('accountsReceivable', id);
+    if (ar && ar.poId) po = await fetchClientPO(ar.poId);
+  } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!ar) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Invoice not found.</p><a href="#/billing/invoices" class="mt-4 text-sm text-forest hover:underline">Back to Invoices</a></div>`);
+    return;
+  }
+  const payments = Array.isArray(ar.payments) ? ar.payments : [];
+  const due = arDueDate(ar, po);
+  const invNo = (po && po.salesInvoiceNo) || '';
+  const cell = (label, value) => `<div><p class="text-xs text-muted uppercase">${label}</p><p class="font-medium text-charcoal mt-0.5">${value || '—'}</p></div>`;
+  contentWrap(`
+    <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
+      ${voucherLetterheadHtml('Invoice', 'Invoice No.', escapeAttr(invNo) || '—', ar.status, 'Date', formatDate(ar.dateCreated))}
+      <div class="grid grid-cols-2 gap-4 text-sm mt-6">
+        ${cell('Bill To', escapeAttr(ar.clientName))}
+        ${cell('Client PO No.', escapeAttr(ar.clientPONumber))}
+        ${cell('Contact', escapeAttr([po && po.clientContactPerson, po && po.clientContactNumber].filter(Boolean).join(' · ')))}
+        ${cell('Delivery Receipt No.', escapeAttr(po && po.deliveryReceiptNo))}
+        ${cell('Payment Terms', escapeAttr((po && po.paymentTerms) || ar.paymentTerms))}
+        ${cell('Due Date', due ? formatDate(due) : '')}
+      </div>
+      <table class="w-full text-sm mt-6">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide"><th class="py-2">Description</th><th class="py-2 text-right">Amount</th></tr></thead>
+        <tbody><tr class="border-b border-borderc"><td class="py-3 pr-4">${escapeAttr((po && po.projectDescription) || ar.description) || '—'}</td><td class="py-3 text-right">${formatCurrency(ar.amount)}</td></tr></tbody>
+      </table>
+      <div class="mt-4 ml-auto max-w-xs text-sm space-y-1.5">
+        <div class="flex justify-between"><span class="text-muted">Total Amount</span><span class="font-medium text-charcoal">${formatCurrency(ar.amount)}</span></div>
+        <div class="flex justify-between"><span class="text-muted">Less: Payments Received</span><span class="font-medium text-charcoal">${formatCurrency(ar.amountPaid)}</span></div>
+        <div class="flex justify-between border-t border-borderc pt-1.5"><span class="font-semibold text-charcoal">Balance Due</span><span class="font-semibold text-forest">${formatCurrency(ar.balance)}</span></div>
+      </div>
+      ${payments.length ? `
+      <div class="mt-6">
+        <p class="text-xs text-muted uppercase mb-2">Payments Received</p>
+        <table class="w-full text-xs">
+          <tbody>${payments.map(p => `<tr class="border-t border-borderc"><td class="py-1.5">${formatDate(p.date)}</td><td class="py-1.5">${escapeAttr(p.method) || '—'}</td><td class="py-1.5">${p.orNumber ? 'OR ' + escapeAttr(p.orNumber) : ''}</td><td class="py-1.5 text-right">${formatCurrency(p.amount)}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>` : ''}
+      <div class="grid grid-cols-2 gap-8 mt-10 text-xs text-muted">
+        <div class="border-t border-borderc pt-2">Prepared By</div><div class="border-t border-borderc pt-2">Received By (Client)</div>
+      </div>
+      ${voucherFooterHtml()}
+    </div>
+    <div class="max-w-3xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden">
+      <button type="button" id="inv-print-btn" class="btn-glass-sm text-sm">Print</button>
+      ${(Number(ar.balance) || 0) > 0.005 ? `<a href="#/finance/ar/payment/${id}" class="btn-glass-sm text-sm">Record Payment</a>` : ''}
+      <a href="#/billing/invoices" class="ml-auto text-sm text-muted hover:text-charcoal self-center">Back to Invoices</a>
+    </div>`);
+  document.getElementById('inv-print-btn').addEventListener('click', () => window.print());
+}
+
+/* ---- Collections ---- */
+async function renderCollectionsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Collections</h1>
+      <p class="text-sm text-muted mt-1">Open receivables, most overdue first. Log each follow-up with the client and when to chase it again; payments are recorded from Accounts Receivable.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      ${billingSearchInputHtml('col-search', 'Search client or PO #...')}
+      <select id="col-filter" class="${BILLING_SELECT_CLS}">
+        <option value="">All Open</option><option value="overdue">Overdue</option><option value="followup">Needs follow-up</option>
+      </select>
+    </div>
+    <div id="col-prompt"></div>
+    <div id="col-summary" class="text-sm text-muted mb-3"></div>
+    <div id="col-container" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  let receivables = [], poById = {};
+  try {
+    const [ars, pos] = await Promise.all([fetchFinanceCollection('accountsReceivable'), fetchClientPOs()]);
+    receivables = ars.filter(a => (Number(a.balance) || 0) > 0.005);
+    pos.forEach(p => { poById[p.id] = p; });
+  } catch (e) { console.error(e); document.getElementById('col-container').innerHTML = poLoadErrorHtml(); return; }
+  const today = todayISO();
+  const inputCls = 'w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+
+  const openPanel = (ar) => {
+    const notes = Array.isArray(ar.collectionNotes) ? ar.collectionNotes : [];
+    const panel = document.getElementById('col-prompt');
+    panel.innerHTML = `
+      <div class="card p-4 max-w-2xl mb-4">
+        <p class="text-sm font-medium text-charcoal mb-1">Log Follow-up</p>
+        <p class="text-xs text-muted mb-3">${escapeAttr(ar.clientName)} · ${escapeAttr(ar.clientPONumber || ar.description)} · balance ${formatCurrency(ar.balance)}</p>
+        ${notes.length ? `<div class="mb-3 max-h-40 overflow-y-auto rounded-md border border-borderc divide-y divide-borderc">
+          ${[...notes].reverse().map(n => `<div class="px-3 py-2 text-xs"><p class="text-muted">${formatDate(n.date)} · ${escapeAttr(n.by)}${n.nextFollowUp ? ' · next: ' + formatDate(n.nextFollowUp) : ''}</p><p class="text-charcoal mt-0.5">${escapeAttr(n.note)}</p></div>`).join('')}
+        </div>` : ''}
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div><label class="block text-xs font-medium text-charcoal mb-1">Follow-up Date <span class="text-red-500">*</span></label><input id="col-date" type="date" value="${today}" max="${today}" class="${inputCls}" /></div>
+          <div><label class="block text-xs font-medium text-charcoal mb-1">Next Follow-up</label><input id="col-next" type="date" min="${today}" class="${inputCls}" /></div>
+          <div class="sm:col-span-2"><label class="block text-xs font-medium text-charcoal mb-1">Note <span class="text-red-500">*</span></label><textarea id="col-note" rows="2" placeholder="e.g. Called their accounting — promised payment by Friday" class="${inputCls}"></textarea></div>
+        </div>
+        <p id="col-error" class="hidden text-xs text-red-600 mt-2"></p>
+        <div class="flex gap-3 mt-3">
+          <button type="button" id="col-save" class="btn-glass-sm text-sm">Save Follow-up</button>
+          <button type="button" id="col-dismiss" class="text-sm text-muted hover:text-charcoal">Nevermind</button>
+        </div>
+      </div>`;
+    document.getElementById('col-note').focus();
+    document.getElementById('col-dismiss').addEventListener('click', () => { panel.innerHTML = ''; });
+    document.getElementById('col-save').addEventListener('click', async () => {
+      const errEl = document.getElementById('col-error');
+      const btn = document.getElementById('col-save');
+      const date = document.getElementById('col-date').value;
+      const next = document.getElementById('col-next').value;
+      const note = document.getElementById('col-note').value.trim();
+      const fail = (m) => { errEl.textContent = m; errEl.classList.remove('hidden'); };
+      if (!date || !note) return fail('Enter the follow-up date and a note.');
+      if (next && next < date) return fail("The next follow-up can't be before this one.");
+      errEl.classList.add('hidden');
+      btn.disabled = true;
+      try {
+        const entry = { date, note, nextFollowUp: next || null, by: currentUser ? currentUser.email : null };
+        const collectionNotes = [...notes, entry];
+        await updateFinanceDoc('accountsReceivable', ar.id, { collectionNotes });
+        ar.collectionNotes = collectionNotes;
+        panel.innerHTML = '';
+        render();
+      } catch (err) {
+        console.error(err);
+        fail('Could not save this follow-up. Please try again.');
+        btn.disabled = false;
+      }
+    });
+  };
+
+  const render = () => {
+    const q = document.getElementById('col-search').value.trim().toLowerCase();
+    const f = document.getElementById('col-filter').value;
+    const rows = receivables.map(a => {
+      const overdueDays = arDaysOverdue(a, poById[a.poId], today);
+      return { a, due: arDueDate(a, poById[a.poId]), overdueDays, state: followUpState(a, overdueDays, today), last: lastFollowUp(a) };
+    }).filter(r =>
+      (!f || (f === 'overdue' ? r.overdueDays > 0 : r.state !== 'ok')) &&
+      (!q || [r.a.clientName, r.a.clientPONumber, r.a.description].some(x => String(x || '').toLowerCase().includes(q))))
+      .sort((x, y) => y.overdueDays - x.overdueDays || (Number(y.a.balance) || 0) - (Number(x.a.balance) || 0));
+    const bal = (list) => list.reduce((s, r) => s + (Number(r.a.balance) || 0), 0);
+    const overdue = rows.filter(r => r.overdueDays > 0), needs = rows.filter(r => r.state !== 'ok');
+    document.getElementById('col-summary').innerHTML = rows.length ? `
+      <span>${rows.length} open · <span class="font-medium text-charcoal">${formatCurrency(bal(rows))}</span></span>
+      <span class="mx-2">|</span><span class="text-red-600">Overdue ${formatCurrency(bal(overdue))} (${overdue.length})</span>
+      <span class="mx-2">·</span><span class="text-amber-700">Needs follow-up ${needs.length}</span>` : '';
+    document.getElementById('col-container').innerHTML = rows.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Balance</th><th class="px-4 py-3">Due</th><th class="px-4 py-3">Overdue</th><th class="px-4 py-3">Last Follow-up</th><th class="px-4 py-3">Next</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(r.a.clientName) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(r.a.clientPONumber || r.a.description) || '—'}</td>
+                <td class="px-4 py-3 font-medium">${formatCurrency(r.a.balance)}</td>
+                <td class="px-4 py-3">${formatDate(r.due)}</td>
+                <td class="px-4 py-3">${r.overdueDays > 0 ? `<span class="text-red-600 font-medium">${r.overdueDays} day${r.overdueDays === 1 ? '' : 's'}</span>` : '<span class="text-muted">—</span>'}</td>
+                <td class="px-4 py-3 max-w-[260px]">${r.last ? `<p class="text-xs text-muted">${formatDate(r.last.date)}</p><p class="truncate" title="${escapeAttr(r.last.note)}">${escapeAttr(r.last.note)}</p>` : '<span class="text-muted">—</span>'}</td>
+                <td class="px-4 py-3">${r.state === 'none' ? '<span class="text-xs text-amber-700">No follow-up yet</span>'
+                  : r.last && r.last.nextFollowUp ? `<span class="${r.state === 'due' ? 'text-amber-700 font-medium' : ''}">${formatDate(r.last.nextFollowUp)}${r.state === 'due' ? ' · due' : ''}</span>` : '<span class="text-muted">—</span>'}</td>
+                <td class="px-4 py-3 text-right whitespace-nowrap">
+                  <button type="button" class="btn-glass-sm col-log-btn" data-id="${r.a.id}">Log Follow-up</button>
+                  <a href="#/finance/ar/payment/${r.a.id}" class="btn-glass-sm">Record Payment</a>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 px-6 text-sm text-muted">${receivables.length ? 'Nothing matches your filters.' : 'No open receivables — everything has been collected.'}</div>`;
+    document.querySelectorAll('.col-log-btn').forEach(b =>
+      b.addEventListener('click', () => openPanel(receivables.find(x => x.id === b.dataset.id))));
+    refreshIcons();
+  };
+  render();
+  document.getElementById('col-search').addEventListener('input', render);
+  document.getElementById('col-filter').addEventListener('change', render);
+}
+
+/* ---- Official Receipts ---- */
+async function renderOfficialReceiptsPage() {
+  contentWrap(`
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-charcoal">Official Receipts</h1>
+      <p class="text-sm text-muted mt-1">A receipt is issued automatically each time a client payment is recorded in Accounts Receivable. Open one to view or print it.</p>
+    </div>
+    <div class="flex flex-wrap gap-3 mb-4">${billingSearchInputHtml('or-search', 'Search OR no., client or reference...')}</div>
+    <div id="or-summary" class="text-sm text-muted mb-3"></div>
+    <div id="or-container" class="text-sm text-muted mb-8">Loading...</div>
+    <div id="or-missing"></div>`);
+  refreshIcons();
+  let receipts = [], missing = [];
+  const load = async () => {
+    const [ors, ars] = await Promise.all([fetchFinanceCollection('officialReceipts'), fetchFinanceCollection('accountsReceivable')]);
+    receipts = ors.sort((a, b) => String(b.number || '').localeCompare(String(a.number || '')));
+    missing = [];
+    ars.forEach(ar => (Array.isArray(ar.payments) ? ar.payments : []).forEach((p, idx) => {
+      if (!p.orId) missing.push({ ar, idx, p });
+    }));
+    missing.sort((a, b) => String(b.p.date || '').localeCompare(String(a.p.date || '')));
+  };
+  try { await load(); } catch (e) { console.error(e); document.getElementById('or-container').innerHTML = poLoadErrorHtml(); return; }
+
+  const renderMissing = () => {
+    const el = document.getElementById('or-missing');
+    el.innerHTML = missing.length ? `
+      <h2 class="text-sm font-semibold text-charcoal mb-1">Payments without an Official Receipt</h2>
+      <p class="text-xs text-muted mb-3">Recorded before receipts were issued automatically. Issue one if the client needs a receipt.</p>
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Date</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3 text-right">Action</th>
+          </tr></thead>
+          <tbody>
+            ${missing.map((m, i) => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3">${formatDate(m.p.date)}</td>
+                <td class="px-4 py-3">${escapeAttr(m.ar.clientName) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(m.ar.clientPONumber || m.ar.description) || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(m.p.amount)}</td>
+                <td class="px-4 py-3">${escapeAttr(m.p.method) || '—'}</td>
+                <td class="px-4 py-3 text-right"><button type="button" class="btn-glass-sm or-issue-btn" data-i="${i}">Issue Receipt</button></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '';
+    el.querySelectorAll('.or-issue-btn').forEach(b => b.addEventListener('click', async () => {
+      const m = missing[Number(b.dataset.i)];
+      b.disabled = true; b.textContent = 'Issuing...';
+      try {
+        const or = await issueOfficialReceiptForPayment(m.ar.id, m.idx);
+        navigateTo('billing/official-receipts/view/' + or.id);
+      } catch (e) {
+        console.error(e);
+        b.disabled = false; b.textContent = 'Issue Receipt';
+        alert('Could not issue this receipt. Please try again.');
+      }
+    }));
+  };
+
+  const render = () => {
+    const q = document.getElementById('or-search').value.trim().toLowerCase();
+    const rows = receipts.filter(r => !q || [r.number, r.clientName, r.reference].some(x => String(x || '').toLowerCase().includes(q)));
+    document.getElementById('or-summary').innerHTML = rows.length
+      ? `${rows.length} receipt${rows.length === 1 ? '' : 's'} · Total <span class="font-medium text-charcoal">${formatCurrency(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0))}</span>` : '';
+    document.getElementById('or-container').innerHTML = rows.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">OR No.</th><th class="px-4 py-3">Date</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Reference</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Method</th><th class="px-4 py-3">Received In</th><th class="px-4 py-3 text-right">Actions</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(r.number)}</td>
+                <td class="px-4 py-3">${formatDate(r.date)}</td>
+                <td class="px-4 py-3">${escapeAttr(r.clientName) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(r.reference) || '—'}</td>
+                <td class="px-4 py-3">${formatCurrency(r.amount)}</td>
+                <td class="px-4 py-3">${escapeAttr(r.method) || '—'}</td>
+                <td class="px-4 py-3">${escapeAttr(r.bankAccountName) || 'Cash on hand'}</td>
+                <td class="px-4 py-3 text-right"><a href="#/billing/official-receipts/view/${r.id}" class="btn-glass-sm">View</a></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-12 px-6 text-sm text-muted">${receipts.length ? 'No receipts match your search.' : 'No official receipts issued yet. One is issued each time a client payment is recorded.'}</div>`;
+    refreshIcons();
+  };
+  render(); renderMissing();
+  document.getElementById('or-search').addEventListener('input', render);
+}
+
+async function renderOfficialReceiptViewPage(id) {
+  contentWrap(`<div class="text-sm text-muted">Loading...</div>`);
+  let r = null;
+  try { r = await fetchFinanceDoc('officialReceipts', id); } catch (e) { console.error(e); contentWrap(poLoadErrorHtml()); return; }
+  if (!r) {
+    contentWrap(`<div class="card flex flex-col items-center justify-center text-center py-16 px-6"><p class="text-sm text-charcoal font-medium">Official Receipt not found.</p><a href="#/billing/official-receipts" class="mt-4 text-sm text-forest hover:underline">Back to Official Receipts</a></div>`);
+    return;
+  }
+  const cell = (label, value) => `<div><p class="text-xs text-muted uppercase">${label}</p><p class="font-medium text-charcoal mt-0.5">${value || '—'}</p></div>`;
+  contentWrap(`
+    <div class="relative card p-8 max-w-3xl mx-auto" id="voucher-print-area">
+      ${voucherLetterheadHtml('Official Receipt', 'OR No.', escapeAttr(r.number), 'Issued', 'Date', formatDate(r.date))}
+      <div class="mt-6 text-sm">
+        <p class="text-xs text-muted uppercase">Received from</p>
+        <p class="text-base font-semibold text-charcoal mt-0.5">${escapeAttr(r.clientName) || '—'}</p>
+      </div>
+      <div class="mt-4 rounded-md bg-cream/60 border border-borderc px-4 py-3">
+        <p class="text-xs text-muted uppercase">the sum of</p>
+        <p class="text-sm font-medium text-charcoal mt-0.5">${amountInWords(r.amount)}</p>
+        <p class="text-lg font-semibold text-forest mt-1">${formatCurrency(r.amount)}</p>
+      </div>
+      <div class="grid grid-cols-2 gap-4 text-sm mt-6">
+        ${cell('In payment of', escapeAttr(r.reference))}
+        ${cell('Payment Method', escapeAttr(r.method))}
+        ${cell('Received In', escapeAttr(r.bankAccountName) || 'Cash on hand')}
+        ${cell('Balance After This Payment', (Number(r.balanceAfter) || 0) > 0.005 ? formatCurrency(r.balanceAfter) : 'Fully paid')}
+        ${r.notes ? `<div class="col-span-2">${cell('Notes / Reference', escapeAttr(r.notes))}</div>` : ''}
+      </div>
+      <div class="grid grid-cols-2 gap-8 mt-12 text-xs text-muted">
+        <div class="border-t border-borderc pt-2">Received By (Authorized Signature)</div><div class="pt-2">Issued by: ${escapeAttr(r.issuedBy) || '—'}</div>
+      </div>
+      ${voucherFooterHtml()}
+    </div>
+    <div class="max-w-3xl mx-auto mt-4 flex flex-wrap gap-3 print:hidden">
+      <button type="button" id="or-print-btn" class="btn-glass-sm text-sm">Print</button>
+      <a href="#/finance/accounts-receivable" class="btn-glass-sm text-sm">Accounts Receivable</a>
+      <a href="#/billing/official-receipts" class="ml-auto text-sm text-muted hover:text-charcoal self-center">Back to Official Receipts</a>
+    </div>`);
+  document.getElementById('or-print-btn').addEventListener('click', () => window.print());
+}
+
+/* ---- AR Aging ---- */
+async function renderARAgingPage() {
+  contentWrap(`
+    <div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">AR Aging</h1>
+        <p class="text-sm text-muted mt-1">What clients owe, by how many days past due. The due date comes from the PO's payment terms (counted from the invoice date); COD and advance-payment POs are due on the invoice date.</p>
+      </div>
+      <div class="flex items-end gap-3 print:hidden">
+        <div><label class="block text-xs font-medium text-charcoal mb-1">As of</label><input id="aging-asof" type="date" value="${todayISO()}" class="${BILLING_SELECT_CLS}" /></div>
+        <button type="button" id="aging-print" class="btn-glass-sm text-sm">Print</button>
+      </div>
+    </div>
+    <div id="aging-cards" class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6"></div>
+    <div id="aging-table" class="text-sm text-muted">Loading...</div>`);
+  refreshIcons();
+  let receivables = [], poById = {};
+  try {
+    const [ars, pos] = await Promise.all([fetchFinanceCollection('accountsReceivable'), fetchClientPOs()]);
+    receivables = ars;
+    pos.forEach(p => { poById[p.id] = p; });
+  } catch (e) { console.error(e); document.getElementById('aging-table').innerHTML = poLoadErrorHtml(); return; }
+  const tones = ['text-forest', 'text-charcoal', 'text-amber-700', 'text-orange-600', 'text-red-600'];
+  const draw = () => {
+    const asOf = document.getElementById('aging-asof').value || todayISO();
+    const { rows, totals, grand } = buildARAging(receivables, poById, asOf);
+    document.getElementById('aging-cards').innerHTML = AGING_BUCKETS.map((label, i) => `
+      <div class="card p-4"><p class="text-xs text-muted uppercase">${label}</p>
+        <p class="text-lg font-semibold ${tones[i]} mt-1">${formatCurrency(totals[i])}</p>
+        <p class="text-xs text-muted mt-0.5">${grand > 0 ? Math.round(totals[i] / grand * 100) : 0}% of total</p></div>`).join('');
+    document.getElementById('aging-table').innerHTML = rows.length ? `
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+            <th class="px-4 py-3">Client</th>${AGING_BUCKETS.map(b => `<th class="px-4 py-3 text-right">${b}</th>`).join('')}<th class="px-4 py-3 text-right">Total</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="border-b border-borderc hover:bg-cream/50">
+                <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(r.client)}<span class="text-xs text-muted font-normal"> · ${r.count} open</span></td>
+                ${r.buckets.map(v => `<td class="px-4 py-3 text-right ${v > 0.005 ? '' : 'text-muted'}">${v > 0.005 ? formatCurrency(v) : '—'}</td>`).join('')}
+                <td class="px-4 py-3 text-right font-medium">${formatCurrency(r.total)}</td>
+              </tr>`).join('')}
+            <tr class="bg-cream/60 font-semibold">
+              <td class="px-4 py-3">Total</td>
+              ${totals.map(v => `<td class="px-4 py-3 text-right">${formatCurrency(v)}</td>`).join('')}
+              <td class="px-4 py-3 text-right text-forest">${formatCurrency(grand)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>` : `<div class="card flex items-center justify-center text-center py-16 px-6 text-sm text-muted">No open receivables as of ${formatDate(asOf)}.</div>`;
+  };
+  draw();
+  document.getElementById('aging-asof').addEventListener('change', draw);
+  document.getElementById('aging-print').addEventListener('click', () => window.print());
+}
+
 /* ---- Cash Advances ---- */
 // The account a Cash Advance is charged to when it is released, and cleared from when it is liquidated.
 // Any account in the Chart of Accounts will do except Cash and the receivable/payable control accounts.
@@ -6632,6 +7337,7 @@ async function renderCashAdvanceDetailPage(id) {
         liquidation: { ...pending, approvedBy: currentUser.email, dateApproved: todayISO(), shortfallAPId },
         liquidationPending: null, liquidationRejectionReason: null,
       });
+      refreshApprovalsBadge();
       renderCashAdvanceDetailPage(id);
     } catch (e) {
       console.error(e);
@@ -6647,6 +7353,7 @@ async function renderCashAdvanceDetailPage(id) {
       onConfirm: async (notes) => {
         try {
           await updateFinanceDoc('cashAdvances', id, { status: 'Outstanding', liquidationPending: null, liquidationRejectionReason: notes });
+          refreshApprovalsBadge();
           renderCashAdvanceDetailPage(id);
         } catch (e) {
           console.error(e);
@@ -7008,6 +7715,7 @@ async function renderActivityLogPage() {
 const NUMBERING_SERIES_DEFAULTS = [
   { key: 'DV', label: 'Disbursement Vouchers', defaultPrefix: 'DV' },
   { key: 'CA', label: 'Cash Advances', defaultPrefix: 'CA' },
+  { key: 'OR', label: 'Official Receipts', defaultPrefix: 'OR' },
 ];
 async function renderNumberingSettingsPage() {
   contentWrap(`
