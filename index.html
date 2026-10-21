@@ -1570,11 +1570,16 @@ function injectPOFilesFolderButton() {
   const wrap = document.createElement('div');
   wrap.className = 'mt-2';
   wrap.innerHTML = `
-    <a id="po-files-folder-btn" href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="btn-glass-sm inline-flex items-center gap-1.5">
-      ${icon('folder-open', 'w-3.5 h-3.5')} PO Files (Google Drive)
-    </a>`;
+    <button type="button" id="po-files-folder-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
+      ${icon('folder-open', 'w-3.5 h-3.5')} View PO File (Google Drive)
+    </button>
+    <p class="text-xs text-muted mt-1">Opens the PO file link saved in "Customer PO File" below. If none is saved, opens the PO Files folder.</p>`;
   (holder || input.parentElement).appendChild(wrap);
   refreshIcons();
+  document.getElementById('po-files-folder-btn').addEventListener('click', () => {
+    const ref = (document.getElementById('field-poDocumentReference')?.value || '').trim();
+    window.open(/^https?:\/\//i.test(ref) ? ref : PO_FILES_FOLDER_URL, '_blank', 'noopener,noreferrer');
+  });
 }
 
 /* ---- CRM-v2 Sales Order pull (read-only, cross-project) ---- */
@@ -1778,6 +1783,7 @@ function readPOFormValues() {
     customPaymentDays,
     paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
     warranty: val('warranty'),
+    poDocumentReference: val('poDocumentReference'),
     notes: val('notes'),
   };
 }
@@ -1998,6 +2004,7 @@ function renderNewClientPOPage() {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${paymentTermsFieldHtml()}
           ${textField('warranty', 'Warranty', { placeholder: 'e.g. 1 year on parts and labor' })}
+          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true })}
         </div>
       </div>
@@ -2441,7 +2448,7 @@ async function renderClientPOViewPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${field('Payment Terms', escapeAttr(po.paymentTerms))}
           ${field('Warranty', escapeAttr(po.warranty))}
-          ${field('PO Files', (po.poDocumentReference ? fileRefValue(po.poDocumentReference) + ' · ' : '') + `<a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-forest hover:underline font-medium">${icon('folder-open', 'w-3.5 h-3.5')} Open PO Files (Google Drive)</a>`)}
+          ${field('Customer PO File', fileRefValue(po.poDocumentReference) + ` <a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="ml-3 text-xs text-forest hover:underline">PO Files folder</a>`)}
           ${field('Notes', escapeAttr(po.notes))}
         </div>
       </div>
@@ -2559,6 +2566,7 @@ async function renderClientPOEditPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays, legacyText: po.paymentTermsType ? '' : po.paymentTerms })}
           ${textField('warranty', 'Warranty', { value: po.warranty, placeholder: 'e.g. 1 year on parts and labor' })}
+          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { value: po.poDocumentReference, placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
         </div>
       </div>
