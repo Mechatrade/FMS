@@ -1560,39 +1560,32 @@ async function updateClientPO(id, data) {
   });
 }
 
-/* ---- Link to the CRM-v2 quotation ----
-   CRM_QUOTATION_URL_TEMPLATE is where the button goes. {controlNo} is replaced
-   with the (URL-encoded) Control No. Right now it points at CRM's Quotations
-   list. Once the exact link of CRM's printable quotation page is known, only
-   this one line needs to change, e.g. 'https://mechatrade.github.io/CRM-v2/#quotations/print/{controlNo}'. */
-const CRM_QUOTATION_URL_TEMPLATE = 'https://mechatrade.github.io/CRM-v2/#quotations';
-function crmQuotationUrl(controlNo) {
-  return CRM_QUOTATION_URL_TEMPLATE.replace('{controlNo}', encodeURIComponent(String(controlNo || '').trim()));
-}
-async function openCRMQuotation(controlNo) {
-  const cn = String(controlNo || '').trim();
-  // When the link can't carry the Control No., copy it so it can be pasted into CRM's search.
-  if (cn && !CRM_QUOTATION_URL_TEMPLATE.includes('{controlNo}')) {
-    try { await navigator.clipboard.writeText(cn); } catch (_) {}
-  }
-  window.open(crmQuotationUrl(cn), '_blank', 'noopener');
-}
-// Adds a "View / Print Quotation in CRM" button under the CRM Quotation Control No. field.
-function injectCRMQuotationButton() {
-  const input = document.getElementById('field-crmControlNumber');
-  if (!input || document.getElementById('crm-quotation-btn')) return;
+/* ---- "Open PO File" button: opens the Google Drive / SharePoint link typed in
+   the Customer PO File field. ---- */
+const PO_FILES_FOLDER_URL = 'https://drive.google.com/drive/folders/1BNF_wcA5cJsHXgfypwwTuSkL0KnMjNDc?usp=sharing';
+function injectOpenPOFileButton() {
+  const input = document.getElementById('field-poDocumentReference');
+  if (!input || document.getElementById('open-po-file-btn')) return;
   const holder = input.closest('div');
   const wrap = document.createElement('div');
   wrap.className = 'mt-2';
-  const carries = CRM_QUOTATION_URL_TEMPLATE.includes('{controlNo}');
   wrap.innerHTML = `
-    <button type="button" id="crm-quotation-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
-      ${icon('printer', 'w-3.5 h-3.5')} View / Print Quotation in CRM
+    <button type="button" id="open-po-file-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
+      ${icon('external-link', 'w-3.5 h-3.5')} Open PO File
     </button>
-    ${carries ? '' : `<p class="text-xs text-muted mt-1">Opens CRM's Quotations. The Control No. is copied so you can paste it into CRM's search.</p>`}`;
+    <a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="ml-2 inline-flex items-center gap-1.5 text-xs text-forest hover:underline">
+      ${icon('folder-open', 'w-3.5 h-3.5')} Open PO Files folder (Google Drive)
+    </a>
+    <p id="open-po-file-msg" class="text-xs text-red-600 mt-1 hidden"></p>`;
   (holder || input.parentElement).appendChild(wrap);
   refreshIcons();
-  document.getElementById('crm-quotation-btn').addEventListener('click', () => openCRMQuotation(input.value));
+  document.getElementById('open-po-file-btn').addEventListener('click', () => {
+    const v = input.value.trim();
+    const msg = document.getElementById('open-po-file-msg');
+    if (/^https?:\/\//i.test(v)) { msg.classList.add('hidden'); window.open(v, '_blank', 'noopener,noreferrer'); return; }
+    msg.textContent = v ? 'This is not a link. Paste the full Google Drive link (starting with https://) to open it.' : 'Paste the Google Drive link of the PO file above first.';
+    msg.classList.remove('hidden');
+  });
 }
 
 /* ---- CRM-v2 Sales Order pull (read-only, cross-project) ---- */
@@ -2035,7 +2028,7 @@ function renderNewClientPOPage() {
   wireCRMPullButton();
   applyPendingCRMPull();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
-  injectCRMQuotationButton();
+  injectOpenPOFileButton();
 }
 
 function crmPullResultHtml(so) {
@@ -2439,7 +2432,7 @@ async function renderClientPOViewPage(id) {
       <div class="border-t border-borderc pt-6">
         <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber) + (po.crmControlNumber ? ` <button type="button" data-crm-quote="${escapeAttr(po.crmControlNumber)}" class="ml-2 text-xs text-forest hover:underline">View / Print in CRM</button>` : ''))}
+          ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber))}
           ${field('Sales Invoice No.', escapeAttr(po.salesInvoiceNo))}
           ${field('Delivery Receipt No.', escapeAttr(po.deliveryReceiptNo))}
           ${field('Collection Receipt No.', escapeAttr(po.collectionReceiptNo))}
@@ -2461,7 +2454,7 @@ async function renderClientPOViewPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${field('Payment Terms', escapeAttr(po.paymentTerms))}
           ${field('Warranty', escapeAttr(po.warranty))}
-          ${field('Customer PO File', fileRefValue(po.poDocumentReference))}
+          ${field('Customer PO File', fileRefValue(po.poDocumentReference) + ` <a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="ml-3 text-xs text-forest hover:underline">PO Files folder</a>`)}
           ${field('Notes', escapeAttr(po.notes))}
         </div>
       </div>
@@ -2476,7 +2469,6 @@ async function renderClientPOViewPage(id) {
       </div>
     </div>`);
   refreshIcons();
-  document.querySelectorAll('[data-crm-quote]').forEach(b => b.addEventListener('click', () => openCRMQuotation(b.getAttribute('data-crm-quote'))));
 }
 
 async function renderClientPOEditPage(id) {
@@ -2601,7 +2593,7 @@ async function renderClientPOEditPage(id) {
   wirePOFormAutoCalc();
   wirePaymentTermsField();
   document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
-  injectCRMQuotationButton();
+  injectOpenPOFileButton();
 }
 
 async function handleUpdatePOSubmit(e, id) {
