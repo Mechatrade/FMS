@@ -1560,6 +1560,41 @@ async function updateClientPO(id, data) {
   });
 }
 
+/* ---- Link to the CRM-v2 quotation ----
+   CRM_QUOTATION_URL_TEMPLATE is where the button goes. {controlNo} is replaced
+   with the (URL-encoded) Control No. Right now it points at CRM's Quotations
+   list. Once the exact link of CRM's printable quotation page is known, only
+   this one line needs to change, e.g. 'https://mechatrade.github.io/CRM-v2/#quotations/print/{controlNo}'. */
+const CRM_QUOTATION_URL_TEMPLATE = 'https://mechatrade.github.io/CRM-v2/#quotations';
+function crmQuotationUrl(controlNo) {
+  return CRM_QUOTATION_URL_TEMPLATE.replace('{controlNo}', encodeURIComponent(String(controlNo || '').trim()));
+}
+async function openCRMQuotation(controlNo) {
+  const cn = String(controlNo || '').trim();
+  // When the link can't carry the Control No., copy it so it can be pasted into CRM's search.
+  if (cn && !CRM_QUOTATION_URL_TEMPLATE.includes('{controlNo}')) {
+    try { await navigator.clipboard.writeText(cn); } catch (_) {}
+  }
+  window.open(crmQuotationUrl(cn), '_blank', 'noopener');
+}
+// Adds a "View / Print Quotation in CRM" button under the CRM Quotation Control No. field.
+function injectCRMQuotationButton() {
+  const input = document.getElementById('field-crmControlNumber');
+  if (!input || document.getElementById('crm-quotation-btn')) return;
+  const holder = input.closest('div');
+  const wrap = document.createElement('div');
+  wrap.className = 'mt-2';
+  const carries = CRM_QUOTATION_URL_TEMPLATE.includes('{controlNo}');
+  wrap.innerHTML = `
+    <button type="button" id="crm-quotation-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
+      ${icon('printer', 'w-3.5 h-3.5')} View / Print Quotation in CRM
+    </button>
+    ${carries ? '' : `<p class="text-xs text-muted mt-1">Opens CRM's Quotations. The Control No. is copied so you can paste it into CRM's search.</p>`}`;
+  (holder || input.parentElement).appendChild(wrap);
+  refreshIcons();
+  document.getElementById('crm-quotation-btn').addEventListener('click', () => openCRMQuotation(input.value));
+}
+
 /* ---- CRM-v2 Sales Order pull (read-only, cross-project) ---- */
 async function fetchCRMSalesOrderByControlNo(controlNo) {
   if (!crmReady) throw new Error('CRM connection not configured.');
@@ -2000,6 +2035,7 @@ function renderNewClientPOPage() {
   wireCRMPullButton();
   applyPendingCRMPull();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
+  injectCRMQuotationButton();
 }
 
 function crmPullResultHtml(so) {
@@ -2403,7 +2439,7 @@ async function renderClientPOViewPage(id) {
       <div class="border-t border-borderc pt-6">
         <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber))}
+          ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber) + (po.crmControlNumber ? ` <button type="button" data-crm-quote="${escapeAttr(po.crmControlNumber)}" class="ml-2 text-xs text-forest hover:underline">View / Print in CRM</button>` : ''))}
           ${field('Sales Invoice No.', escapeAttr(po.salesInvoiceNo))}
           ${field('Delivery Receipt No.', escapeAttr(po.deliveryReceiptNo))}
           ${field('Collection Receipt No.', escapeAttr(po.collectionReceiptNo))}
@@ -2440,6 +2476,7 @@ async function renderClientPOViewPage(id) {
       </div>
     </div>`);
   refreshIcons();
+  document.querySelectorAll('[data-crm-quote]').forEach(b => b.addEventListener('click', () => openCRMQuotation(b.getAttribute('data-crm-quote'))));
 }
 
 async function renderClientPOEditPage(id) {
@@ -2564,6 +2601,7 @@ async function renderClientPOEditPage(id) {
   wirePOFormAutoCalc();
   wirePaymentTermsField();
   document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
+  injectCRMQuotationButton();
 }
 
 async function handleUpdatePOSubmit(e, id) {
