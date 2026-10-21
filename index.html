@@ -121,7 +121,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, serverTimestamp,
-  collection, query, where, orderBy, limit, getDocs, Timestamp, onSnapshot
+  collection, query, where, orderBy, limit, getDocs, Timestamp, onSnapshot, arrayUnion
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ==========================================================================
@@ -785,6 +785,40 @@ async function refreshApprovalsBadge() {
   refreshNotificationBell();
 }
 let notificationCache = { pendingDVs: [], recentSalesOrders: [], overdueAdvances: [], liquidationReviews: [] };
+
+/* ---- CRM sales-order notifications: read state is saved per user on users/{uid}.readSalesOrders ---- */
+let pendingCRMPull = null;
+const SO_NEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+function isSalesOrderRead(id) { return !!(currentProfile && Array.isArray(currentProfile.readSalesOrders) && currentProfile.readSalesOrders.includes(id)); }
+async function markSalesOrdersRead(ids) {
+  if (!currentUser || !currentProfile) return;
+  const fresh = [...new Set(ids)].filter(id => !isSalesOrderRead(id));
+  if (!fresh.length) return;
+  currentProfile = { ...currentProfile, readSalesOrders: [...(currentProfile.readSalesOrders || []), ...fresh] };
+  try {
+    await updateDoc(doc(db, 'users', currentUser.uid), { readSalesOrders: arrayUnion(...fresh) });
+  } catch (e) { console.error('Could not save notification read state', e); }
+}
+function openSalesOrderNotification(id) {
+  const so = crmSOById[id];
+  if (!so) return;
+  pendingCRMPull = so;
+  markSalesOrdersRead([id]).then(() => { refreshNotificationBell(); });
+  document.getElementById('notif-panel')?.classList.add('hidden');
+  if (currentPathFromHash() === 'client-orders/new-po') applyPendingCRMPull();
+  else navigateTo('client-orders/new-po');
+  refreshNotificationBell(); // optimistic: local read state is already updated
+}
+function applyPendingCRMPull() {
+  const so = pendingCRMPull;
+  if (!so || !document.getElementById('po-form')) return;
+  pendingCRMPull = null;
+  fillPOFormFromCRM(so);
+  const input = document.getElementById('crm-pull-input');
+  if (input) input.value = so.controlNo || '';
+  const box = document.getElementById('crm-pull-result');
+  if (box) box.innerHTML = `<div class="border border-forest/30 bg-forest/5 rounded-md p-3 text-sm text-charcoal">Auto-filled from CRM Sales Order <span class="font-medium">${escapeAttr(so.orderNo || so.controlNo || '')}</span> — ${escapeAttr((so.billedTo && so.billedTo.name) || '')}. Review the fields, set the PO Type and Sales Person, then save.</div>`;
+}
 function notificationPanelBodyHtml() {
   const { pendingDVs, recentSalesOrders, overdueAdvances, liquidationReviews } = notificationCache;
   const approvalsSection = canApproveDisbursements() ? `
@@ -811,13 +845,14 @@ function notificationPanelBodyHtml() {
         <p class="text-sm text-charcoal">${ca.number} — ${escapeAttr(ca.employeeName)}</p>
         <p class="text-xs text-red-600">${formatCurrency(ca.amount)} · ${Math.round((new Date(todayISO()) - new Date(ca.dateReleased)) / 86400000)}d unliquidated</p>
       </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">None overdue.</p>`}` : '';
-  const crmSection = crmReady ? `
+  const crmSection = (crmReady && canAccess('client-orders')) ? `
     <div class="px-3 py-2 bg-cream/60"><p class="text-xs font-semibold text-muted uppercase tracking-wide">New Sales Orders (CRM)</p></div>
-    ${recentSalesOrders.length ? recentSalesOrders.map(so => `
-      <a href="#/client-orders/new-po" class="block px-3 py-2 hover:bg-cream border-b border-borderc last:border-0">
+    ${recentSalesOrders.length ? recentSalesOrders.slice(0, 8).map(so => `
+      <a href="#/client-orders/new-po" data-so-open="${so.id}" class="block px-3 py-2 hover:bg-cream border-b border-borderc">
         <p class="text-sm text-charcoal">${escapeAttr(so.controlNo || so.orderNo || 'Sales Order')} — ${escapeAttr((so.billedTo && so.billedTo.name) || 'Unknown Client')}</p>
-        <p class="text-xs text-muted">${so.total != null ? formatCurrency(so.total) + ' · ' : ''}Pull into a Client PO</p>
-      </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted">No recent sales orders.</p>`}` : '';
+        <p class="text-xs text-muted">${so.total != null ? formatCurrency(so.total) + ' · ' : ''}Click to auto-fill a new Client PO</p>
+      </a>`).join('') : `<p class="px-3 py-3 text-xs text-muted border-b border-borderc">No new sales orders.</p>`}
+    <a href="#/notifications" class="block px-3 py-2.5 text-center text-xs font-medium text-forest hover:bg-cream">View notification history</a>` : '';
   if (!approvalsSection && !liquidationSection && !overdueSection && !crmSection) return `<p class="px-3 py-4 text-xs text-muted text-center">No notifications.</p>`;
   return approvalsSection + liquidationSection + overdueSection + crmSection;
 }
@@ -842,12 +877,15 @@ async function refreshNotificationBell() {
   let recentSalesOrders = [];
   if (crmReady) {
     try {
-      recentSalesOrders = await fetchRecentCRMSalesOrders(5);
+      if (canAccess('client-orders')) {
+        const all = await fetchRecentCRMSalesOrders(100);
+        const cutoff = Date.now() - SO_NEW_WINDOW_MS;
+        recentSalesOrders = all.filter(so => !isSalesOrderRead(so.id) && salesOrderTimestampMs(so) >= cutoff);
+      }
     } catch (e) { console.error(e); }
   }
   notificationCache = { pendingDVs, recentSalesOrders, overdueAdvances, liquidationReviews };
-  const recentCutoffMs = Date.now() - 3 * 24 * 60 * 60 * 1000;
-  const newSalesOrderCount = recentSalesOrders.filter(so => salesOrderTimestampMs(so) >= recentCutoffMs).length;
+  const newSalesOrderCount = recentSalesOrders.length;
   const total = pendingDVs.length + liquidationReviews.length + overdueAdvances.length + newSalesOrderCount;
   badgeEl.innerHTML = total > 0 ? `<span class="nav-badge" style="position:absolute;top:2px;right:2px;">${total}</span>` : '';
   if (bodyEl) { bodyEl.innerHTML = notificationPanelBodyHtml(); refreshIcons(); }
@@ -895,7 +933,12 @@ function wireShellEvents() {
     if (willOpen) refreshNotificationBell();
   });
   document.addEventListener('click', () => document.getElementById('notif-panel')?.classList.add('hidden'));
-  document.getElementById('notif-panel')?.addEventListener('click', (e) => e.stopPropagation());
+  document.getElementById('notif-panel')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const soLink = e.target.closest('[data-so-open]');
+    if (soLink) { e.preventDefault(); openSalesOrderNotification(soLink.getAttribute('data-so-open')); return; }
+    if (e.target.closest('a[href]')) document.getElementById('notif-panel')?.classList.add('hidden');
+  });
 
   document.querySelectorAll('[data-nav-toggle]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -961,6 +1004,14 @@ function renderRoute() {
   if (path === 'dashboard' && !canAccess('dashboard')) {
     const target = landingPath();
     if (target !== 'dashboard') { window.location.hash = '#/' + target; return; }
+  }
+
+  // Notification history (not in the sidebar; opened from the bell)
+  if (path === 'notifications') {
+    if (!canAccess('client-orders')) { renderNoAccess('Notifications'); buildBreadcrumb(null, null); return; }
+    buildBreadcrumb(null, { name: 'Notification History' });
+    renderNotificationHistoryPage();
+    return;
   }
 
   // Page-level limits (e.g. Procurement Staff may only open Procurement Reports)
@@ -1523,11 +1574,13 @@ function salesOrderTimestampMs(so) {
   if (so.poDate) { const t = new Date(so.poDate).getTime(); if (!isNaN(t)) return t; }
   return 0;
 }
+const crmSOById = {};
 async function fetchRecentCRMSalesOrders(limitCount) {
   if (!crmReady) return [];
   const snap = await getDocs(collection(crmDb, 'salesorders'));
   const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   docs.sort((a, b) => salesOrderTimestampMs(b) - salesOrderTimestampMs(a));
+  docs.forEach(d => { crmSOById[d.id] = d; });
   return docs.slice(0, limitCount);
 }
 async function fetchAllCRMSuppliers() {
@@ -1945,6 +1998,7 @@ function renderNewClientPOPage() {
   wirePOFormAutoCalc();
   wirePaymentTermsField();
   wireCRMPullButton();
+  applyPendingCRMPull();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
 }
 
@@ -7881,6 +7935,58 @@ function openAddTeamMemberModal() {
       btn.disabled = false; btn.textContent = 'Create Account';
     }
   });
+}
+
+/* ---- Notification History (CRM sales orders, newest first) ---- */
+async function renderNotificationHistoryPage(filter = 'all') {
+  contentWrap(`
+    <div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Notification History</h1>
+        <p class="text-sm text-muted mt-1">Sales Orders received from CRM. Click one to auto-fill a new Client PO. Opened ones are marked as read and leave the bell.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="nh-filter" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest">
+          <option value="all" ${filter === 'all' ? 'selected' : ''}>All</option>
+          <option value="unread" ${filter === 'unread' ? 'selected' : ''}>Unread only</option>
+          <option value="read" ${filter === 'read' ? 'selected' : ''}>Read only</option>
+        </select>
+        <button type="button" id="nh-mark-all" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm text-charcoal hover:bg-cream">Mark all as read</button>
+      </div>
+    </div>
+    <div id="nh-list" class="text-sm text-muted">Loading...</div>`);
+  try {
+    const all = await fetchRecentCRMSalesOrders(200);
+    const rows = all.filter(so => filter === 'all' || (filter === 'read') === isSalesOrderRead(so.id));
+    const list = document.getElementById('nh-list');
+    list.innerHTML = rows.length ? `
+      <div class="card overflow-x-auto"><table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Control No.</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Customer PO</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Received</th><th class="px-4 py-3">Status</th>
+        </tr></thead>
+        <tbody>${rows.map(so => {
+          const ms = salesOrderTimestampMs(so);
+          const read = isSalesOrderRead(so.id);
+          return `<tr data-so-open="${so.id}" class="border-b border-borderc last:border-0 hover:bg-cream/50 cursor-pointer">
+            <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(so.controlNo || so.orderNo || '—')}</td>
+            <td class="px-4 py-3">${escapeAttr((so.billedTo && so.billedTo.name) || '—')}</td>
+            <td class="px-4 py-3">${escapeAttr(so.poNumber || '—')}</td>
+            <td class="px-4 py-3">${so.total != null ? formatCurrency(so.total) : '—'}</td>
+            <td class="px-4 py-3">${ms ? formatDate(new Date(ms).toISOString().slice(0, 10)) : '—'}</td>
+            <td class="px-4 py-3">${read ? '<span class="text-xs text-muted">Read</span>' : '<span class="text-xs font-medium text-forest">New</span>'}</td>
+          </tr>`;
+        }).join('')}</tbody></table></div>` : `<div class="card text-center py-12 px-6 text-sm text-muted">No notifications to show.</div>`;
+    list.querySelectorAll('[data-so-open]').forEach(r => r.addEventListener('click', () => openSalesOrderNotification(r.getAttribute('data-so-open'))));
+    document.getElementById('nh-filter').addEventListener('change', (e) => renderNotificationHistoryPage(e.target.value));
+    document.getElementById('nh-mark-all').addEventListener('click', async () => {
+      await markSalesOrdersRead(all.map(so => so.id));
+      refreshNotificationBell();
+      renderNotificationHistoryPage(filter);
+    });
+  } catch (e) {
+    console.error(e);
+    document.getElementById('nh-list').innerHTML = `<div class="card text-center py-12 px-6 text-sm text-red-600">Could not load notifications from CRM.</div>`;
+  }
 }
 
 async function renderTeamsPage() {
