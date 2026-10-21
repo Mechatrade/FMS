@@ -1564,7 +1564,7 @@ async function updateClientPO(id, data) {
    opens the shared Google Drive folder where the PO files are kept. ---- */
 const PO_FILES_FOLDER_URL = 'https://drive.google.com/drive/folders/1BNF_wcA5cJsHXgfypwwTuSkL0KnMjNDc?usp=sharing';
 function injectPOFilesFolderButton() {
-  const input = document.getElementById('field-crmControlNumber');
+  const input = document.getElementById('field-poDocumentReference');
   if (!input || document.getElementById('po-files-folder-btn')) return;
   const holder = input.closest('div');
   const wrap = document.createElement('div');
@@ -1573,7 +1573,7 @@ function injectPOFilesFolderButton() {
     <button type="button" id="po-files-folder-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
       ${icon('folder-open', 'w-3.5 h-3.5')} View PO File (Google Drive)
     </button>
-    <p class="text-xs text-muted mt-1">Opens the PO file link saved in "Customer PO File" below. If none is saved, opens the PO Files folder.</p>`;
+    <p class="text-xs text-muted mt-1">Opens the link above. If none is entered, opens the PO Files folder.</p>`;
   (holder || input.parentElement).appendChild(wrap);
   refreshIcons();
   document.getElementById('po-files-folder-btn').addEventListener('click', () => {
