@@ -1560,32 +1560,21 @@ async function updateClientPO(id, data) {
   });
 }
 
-/* ---- "Open PO File" button: opens the Google Drive / SharePoint link typed in
-   the Customer PO File field. ---- */
+/* ---- PO Files button: sits under References > CRM Quotation Control No. and
+   opens the shared Google Drive folder where the PO files are kept. ---- */
 const PO_FILES_FOLDER_URL = 'https://drive.google.com/drive/folders/1BNF_wcA5cJsHXgfypwwTuSkL0KnMjNDc?usp=sharing';
-function injectOpenPOFileButton() {
-  const input = document.getElementById('field-poDocumentReference');
-  if (!input || document.getElementById('open-po-file-btn')) return;
+function injectPOFilesFolderButton() {
+  const input = document.getElementById('field-crmControlNumber');
+  if (!input || document.getElementById('po-files-folder-btn')) return;
   const holder = input.closest('div');
   const wrap = document.createElement('div');
   wrap.className = 'mt-2';
   wrap.innerHTML = `
-    <button type="button" id="open-po-file-btn" class="btn-glass-sm inline-flex items-center gap-1.5">
-      ${icon('external-link', 'w-3.5 h-3.5')} Open PO File
-    </button>
-    <a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="ml-2 inline-flex items-center gap-1.5 text-xs text-forest hover:underline">
-      ${icon('folder-open', 'w-3.5 h-3.5')} Open PO Files folder (Google Drive)
-    </a>
-    <p id="open-po-file-msg" class="text-xs text-red-600 mt-1 hidden"></p>`;
+    <a id="po-files-folder-btn" href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="btn-glass-sm inline-flex items-center gap-1.5">
+      ${icon('folder-open', 'w-3.5 h-3.5')} PO Files (Google Drive)
+    </a>`;
   (holder || input.parentElement).appendChild(wrap);
   refreshIcons();
-  document.getElementById('open-po-file-btn').addEventListener('click', () => {
-    const v = input.value.trim();
-    const msg = document.getElementById('open-po-file-msg');
-    if (/^https?:\/\//i.test(v)) { msg.classList.add('hidden'); window.open(v, '_blank', 'noopener,noreferrer'); return; }
-    msg.textContent = v ? 'This is not a link. Paste the full Google Drive link (starting with https://) to open it.' : 'Paste the Google Drive link of the PO file above first.';
-    msg.classList.remove('hidden');
-  });
 }
 
 /* ---- CRM-v2 Sales Order pull (read-only, cross-project) ---- */
@@ -1789,7 +1778,6 @@ function readPOFormValues() {
     customPaymentDays,
     paymentTerms: paymentTermsSummary(paymentTermsType, advancePaymentAmount, paymentTermsDays, customPaymentDays),
     warranty: val('warranty'),
-    poDocumentReference: val('poDocumentReference'),
     notes: val('notes'),
   };
 }
@@ -2010,7 +1998,6 @@ function renderNewClientPOPage() {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${paymentTermsFieldHtml()}
           ${textField('warranty', 'Warranty', { placeholder: 'e.g. 1 year on parts and labor' })}
-          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true })}
         </div>
       </div>
@@ -2028,7 +2015,7 @@ function renderNewClientPOPage() {
   wireCRMPullButton();
   applyPendingCRMPull();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
-  injectOpenPOFileButton();
+  injectPOFilesFolderButton();
 }
 
 function crmPullResultHtml(so) {
@@ -2454,7 +2441,7 @@ async function renderClientPOViewPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${field('Payment Terms', escapeAttr(po.paymentTerms))}
           ${field('Warranty', escapeAttr(po.warranty))}
-          ${field('Customer PO File', fileRefValue(po.poDocumentReference) + ` <a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="ml-3 text-xs text-forest hover:underline">PO Files folder</a>`)}
+          ${field('PO Files', (po.poDocumentReference ? fileRefValue(po.poDocumentReference) + ' · ' : '') + `<a href="${PO_FILES_FOLDER_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-forest hover:underline font-medium">${icon('folder-open', 'w-3.5 h-3.5')} Open PO Files (Google Drive)</a>`)}
           ${field('Notes', escapeAttr(po.notes))}
         </div>
       </div>
@@ -2572,7 +2559,6 @@ async function renderClientPOEditPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${paymentTermsFieldHtml({ type: po.paymentTermsType, advanceAmount: po.advancePaymentAmount, days: po.paymentTermsDays, customDays: po.customPaymentDays, legacyText: po.paymentTermsType ? '' : po.paymentTerms })}
           ${textField('warranty', 'Warranty', { value: po.warranty, placeholder: 'e.g. 1 year on parts and labor' })}
-          ${textField('poDocumentReference', 'Customer PO File (Link or Reference)', { value: po.poDocumentReference, placeholder: 'Paste a Drive/SharePoint link, or type a filename', hint: 'A link renders as an "Open File" button on the view page.' })}
           ${textareaField('notes', 'Notes', { span2: true, value: po.notes })}
         </div>
       </div>
@@ -2593,7 +2579,7 @@ async function renderClientPOEditPage(id) {
   wirePOFormAutoCalc();
   wirePaymentTermsField();
   document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
-  injectOpenPOFileButton();
+  injectPOFilesFolderButton();
 }
 
 async function handleUpdatePOSubmit(e, id) {
