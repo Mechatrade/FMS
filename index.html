@@ -813,11 +813,11 @@ function applyPendingCRMPull() {
   const so = pendingCRMPull;
   if (!so || !document.getElementById('po-form')) return;
   pendingCRMPull = null;
-  fillPOFormFromCRM(so);
   const input = document.getElementById('crm-pull-input');
   if (input) input.value = so.controlNo || '';
   const box = document.getElementById('crm-pull-result');
   if (box) box.innerHTML = `<div class="border border-forest/30 bg-forest/5 rounded-md p-3 text-sm text-charcoal">Auto-filled from CRM Sales Order <span class="font-medium">${escapeAttr(so.orderNo || so.controlNo || '')}</span> — ${escapeAttr((so.billedTo && so.billedTo.name) || '')}. Review the fields, set the PO Type and Sales Person, then save.</div>`;
+  fillPOFormFromCRM(so); // after the note, so any warning it adds stays visible
 }
 function notificationPanelBodyHtml() {
   const { pendingDVs, recentSalesOrders, overdueAdvances, liquidationReviews } = notificationCache;
@@ -1775,6 +1775,7 @@ function readPOFormValues() {
     salesPerson: val('salesPerson'),
     salesInvoiceNo: val('salesInvoiceNo'),
     crmControlNumber: val('crmControlNumber'),
+    crmSalesOrderNumber: val('crmSalesOrderNumber'),
     deliveryReceiptNo: val('deliveryReceiptNo'),
     collectionReceiptNo: val('collectionReceiptNo'),
     paymentTermsType,
@@ -1991,6 +1992,7 @@ function renderNewClientPOPage() {
         <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('crmControlNumber', 'CRM Quotation Control No.', { placeholder: 'e.g. Q-2026-0142', hint: 'Links back to the won quotation in Mechatrade CRM-v2.' })}
+          ${textField('crmSalesOrderNumber', 'CRM Sales Order No.', { placeholder: 'e.g. SO-MTISI-08-0926-003', hint: 'The Sales Order Number from Mechatrade CRM-v2.' })}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
           ${textField('salesInvoiceNo', 'Sales Invoice No.')}
@@ -2082,7 +2084,15 @@ function fillPOFormFromCRM(so) {
   setVal('clientName', so.billedTo && so.billedTo.name);
   setVal('clientPONumber', so.poNumber);
   setVal('dateReceived', so.poDate);
-  setVal('crmControlNumber', so.controlNo);
+  // Quotation Control No. = the quotation's control number carried on the sales order,
+  // NOT the sales order's own controlNo. Matched by field name (anything like quotation...control).
+  const qKey = Object.keys(so).find(k => /quot\w*(control|ctrl)/i.test(k) && typeof so[k] === 'string' && so[k].trim());
+  setVal('crmControlNumber', qKey ? so[qKey] : '');
+  setVal('crmSalesOrderNumber', so.orderNo || '');
+  if (!qKey) {
+    const box = document.getElementById('crm-pull-result');
+    if (box) box.insertAdjacentHTML('beforeend', `<p class="text-xs text-amber-700 mt-2">Quotation Control No. wasn't found on this CRM sales order, so it was left blank. Type it in under References.</p>`);
+  }
   setVal('clientContactPerson', so.billedTo && so.billedTo.contactName);
   setVal('clientContactNumber', so.billedTo && so.billedTo.phone);
   setVal('poAmount', so.total);
@@ -2427,6 +2437,7 @@ async function renderClientPOViewPage(id) {
         <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           ${field('CRM Quotation Control No.', escapeAttr(po.crmControlNumber))}
+          ${field('CRM Sales Order No.', escapeAttr(po.crmSalesOrderNumber))}
           ${field('Sales Invoice No.', escapeAttr(po.salesInvoiceNo))}
           ${field('Delivery Receipt No.', escapeAttr(po.deliveryReceiptNo))}
           ${field('Collection Receipt No.', escapeAttr(po.collectionReceiptNo))}
@@ -2543,6 +2554,7 @@ async function renderClientPOEditPage(id) {
         <h2 class="text-sm font-semibold text-charcoal mb-3">References</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('crmControlNumber', 'CRM Quotation Control No.', { value: po.crmControlNumber, placeholder: 'e.g. Q-2026-0142', hint: 'Links back to the won quotation in Mechatrade CRM-v2.' })}
+          ${textField('crmSalesOrderNumber', 'CRM Sales Order No.', { value: po.crmSalesOrderNumber, placeholder: 'e.g. SO-MTISI-08-0926-003', hint: 'The Sales Order Number from Mechatrade CRM-v2.' })}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
           ${textField('salesInvoiceNo', 'Sales Invoice No.', { value: po.salesInvoiceNo })}
