@@ -121,7 +121,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, addDoc, updateDoc, serverTimestamp,
-  collection, query, where, orderBy, limit, getDocs, Timestamp
+  collection, query, where, orderBy, limit, getDocs, Timestamp, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ==========================================================================
@@ -323,13 +323,20 @@ const ROLE_PERMISSIONS = {
   system_admin: {},
   finance_manager: { procurement: false, installation: false, administration: false, settings: false },
   custodian: { dashboard: false, 'client-orders': false, finance: false, billing: false, procurement: false, installation: false, 'cash-management': false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
-  procurement_staff: { 'client-orders': false, finance: false, billing: false, installation: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
+  procurement_staff: { finance: false, billing: false, installation: false, 'cash-management': false, disbursement: false, 'budget-forecast': false, approvals: false, documents: false, administration: false, settings: false },
   operations: { finance: false, billing: false, procurement: false, 'cash-management': false, disbursement: false, reports: false, 'budget-forecast': false, approvals: false, administration: false, settings: false },
   // Legacy
   super_admin: {},
   admin: {},
   management: {},
   finance_staff: { administration: false, settings: false },
+};
+
+// Optional page-level limits inside a module a role can open. If a role has an
+// entry for a module, ONLY the listed pages under it are visible/reachable.
+// Procurement Staff: Dashboard, Procurement, and Reports > Procurement Reports only.
+const ROLE_SUBPERMISSIONS = {
+  procurement_staff: { reports: ['reports/procurement'] },
 };
 
 let currentUser = null;
@@ -362,12 +369,23 @@ function canAccess(topPath) {
   const perms = ROLE_PERMISSIONS[currentProfile.role] || {};
   return perms[topPath] !== false;
 }
+function canAccessChild(childPath) {
+  if (!currentProfile) return true;
+  const top = String(childPath).split('/')[0];
+  const sub = (ROLE_SUBPERMISSIONS[currentProfile.role] || {})[top];
+  return !sub || sub.includes(childPath);
+}
 // First page this role can open — where it lands after signing in, and where it is sent
 // if it asks for a page (such as the Dashboard) that its role doesn't include.
 function landingPath() {
   for (const item of NAV) {
     if (!canAccess(item.path)) continue;
-    return item.children && item.children.length ? item.children[0].path : item.path;
+    if (item.children && item.children.length) {
+      const first = item.children.find(c => canAccessChild(c.path));
+      if (first) return first.path;
+      continue;
+    }
+    return item.path;
   }
   return 'dashboard';
 }
@@ -630,7 +648,7 @@ function sidebarHtml() {
         </button>
         ${hasChildren ? `
           <div class="nav-children pl-9 space-y-0.5 mt-0.5 overflow-hidden" data-nav-children="${item.path}">
-            ${item.children.map(c => `
+            ${item.children.filter(c => canAccessChild(c.path)).map(c => `
               <a href="#/${c.path}" data-route="${c.path}"
                  class="nav-link block px-3 py-2 rounded-md text-[13px] text-cream/70 hover:text-cream hover:bg-white/10 transition-colors">
                 ${c.name}
@@ -721,6 +739,36 @@ function renderShell() {
   wireShellEvents();
   applyUserToChrome();
   refreshApprovalsBadge();
+  startLiveNotifications();
+}
+
+/* ---- Live notification bell ----
+   Listens to CRM sales orders (and, for approvers, FMS vouchers / cash
+   advances) so the bell and badges update by themselves, no refresh needed. */
+let liveNotifUnsubs = [];
+let liveNotifTimer = null;
+let liveNotifPoll = null;
+function scheduleLiveNotifRefresh() {
+  clearTimeout(liveNotifTimer);
+  liveNotifTimer = setTimeout(() => { refreshApprovalsBadge(); }, 800);
+}
+function stopLiveNotifications() {
+  liveNotifUnsubs.forEach(u => { try { u(); } catch (_) {} });
+  liveNotifUnsubs = [];
+  clearTimeout(liveNotifTimer);
+  clearInterval(liveNotifPoll); liveNotifPoll = null;
+}
+function startLiveNotifications() {
+  stopLiveNotifications();
+  const watch = (database, name) => {
+    try {
+      liveNotifUnsubs.push(onSnapshot(collection(database, name), scheduleLiveNotifRefresh, (e) => console.warn('Live ' + name + ' listener:', e.code || e)));
+    } catch (e) { console.error(e); }
+  };
+  if (crmReady && crmDb) watch(crmDb, 'salesorders');
+  if (db && canApproveDisbursements()) { watch(db, 'disbursementVouchers'); watch(db, 'cashAdvances'); }
+  // Safety net in case a listener drops (overdue advances also change by date, not by edits).
+  liveNotifPoll = setInterval(() => { if (currentUser) refreshApprovalsBadge(); }, 5 * 60 * 1000);
 }
 
 async function refreshApprovalsBadge() {
@@ -879,6 +927,7 @@ function toggleSidebar(open) {
 }
 
 async function handleSignOut() {
+  stopLiveNotifications();
   try { await signOut(auth); } catch (e) { console.error(e); }
 }
 
@@ -912,6 +961,11 @@ function renderRoute() {
   if (path === 'dashboard' && !canAccess('dashboard')) {
     const target = landingPath();
     if (target !== 'dashboard') { window.location.hash = '#/' + target; return; }
+  }
+
+  // Page-level limits (e.g. Procurement Staff may only open Procurement Reports)
+  if (path.startsWith('reports/') && !canAccessChild(path)) {
+    renderNoAccess('Reports'); buildBreadcrumb(null, null); return;
   }
 
   // Standby / future module check (not in NAV, reached only via config)
