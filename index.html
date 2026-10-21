@@ -387,6 +387,19 @@ function renderLoading() {
     </div>`;
 }
 
+/* ---- ID-number login: the "Login Name" is the staff ID (e.g. MTISI-00007).
+   Firebase Auth still needs an email, so we derive a hidden one from the ID.
+   Typing a real email (contains "@") is still accepted for older accounts. ---- */
+const ID_EMAIL_DOMAIN = "mechatrade-fms.internal";
+function normalizeLoginName(v) { return String(v || '').trim().toUpperCase(); }
+function loginNameToEmail(v) {
+  const raw = String(v || '').trim();
+  if (raw.includes('@')) return raw;
+  return raw.toLowerCase() + '@' + ID_EMAIL_DOMAIN;
+}
+function isInternalEmail(email) { return String(email || '').toLowerCase().endsWith('@' + ID_EMAIL_DOMAIN); }
+function loginNameFromEmail(email) { return isInternalEmail(email) ? String(email).split('@')[0].toUpperCase() : ''; }
+
 function renderLogin(mode = "signin") {
   const isSignup = mode === "signup";
 
@@ -419,10 +432,11 @@ function renderLogin(mode = "signin") {
             </div>` : ''}
 
             <div>
-              <label class="block text-sm font-medium text-charcoal mb-1.5">Email</label>
-              <input id="login-email" type="email" required autocomplete="username"
+              <label class="block text-sm font-medium text-charcoal mb-1.5">${isSignup ? 'ID Number' : 'Login Name (ID Number)'}</label>
+              <input id="login-email" type="text" required autocomplete="username" autocapitalize="characters" spellcheck="false"
                 class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest"
-                placeholder="you@mechatrade.com" />
+                placeholder="MTISI-00007" />
+              ${isSignup ? `<p class="text-xs text-muted mt-1.5">Your company ID number. This is what you will use to sign in.</p>` : ''}
             </div>
 
             <div>
@@ -487,14 +501,18 @@ function renderLogin(mode = "signin") {
   const forgotLink = document.getElementById('forgot-link');
   if (forgotLink) {
     forgotLink.addEventListener('click', async () => {
-      const email = document.getElementById('login-email').value.trim();
-      if (!email) { showLoginError('Enter your email above first, then click "Forgot password?" again.'); return; }
-      try {
-        await sendPasswordResetEmail(auth, email);
-        showLoginError('Password reset email sent. Check your inbox.', true);
-      } catch (e) {
-        showLoginError(friendlyAuthError(e));
+      const entered = document.getElementById('login-email').value.trim();
+      // Older accounts that signed up with a real email can still get a reset email.
+      if (entered.includes('@') && !isInternalEmail(entered)) {
+        try {
+          await sendPasswordResetEmail(auth, entered);
+          showLoginError('Password reset email sent. Check your inbox.', true);
+        } catch (e) {
+          showLoginError(friendlyAuthError(e));
+        }
+        return;
       }
+      showLoginError('ID Number accounts have no email on file. Please contact your System Admin to reset your password.');
     });
   }
 
@@ -505,7 +523,7 @@ function renderLogin(mode = "signin") {
 }
 
 async function handleSignIn() {
-  const email = document.getElementById('login-email').value.trim();
+  const email = loginNameToEmail(document.getElementById('login-email').value);
   const password = document.getElementById('login-password').value;
   const remember = document.getElementById('login-remember').checked;
   const btn = document.getElementById('login-submit');
@@ -529,13 +547,15 @@ async function handleSignIn() {
 
 async function handleSignUp() {
   const name = document.getElementById('login-name').value.trim();
-  const email = document.getElementById('login-email').value.trim();
+  const loginName = normalizeLoginName(document.getElementById('login-email').value);
+  const email = loginNameToEmail(loginName);
   const password = document.getElementById('login-password').value;
   const confirmPassword = document.getElementById('login-password-confirm').value;
   const btn = document.getElementById('login-submit');
   const btnText = document.getElementById('login-submit-text');
 
   if (!firebaseReady) { showLoginError('Firebase is not configured. See the firebaseConfig object near the top of this file.'); return; }
+  if (!/^[A-Z0-9][A-Z0-9._-]{2,}$/.test(loginName)) { showLoginError('Enter a valid ID Number (letters, numbers, dash), e.g. MTISI-00007.'); return; }
   if (password !== confirmPassword) { showLoginError('Passwords do not match.'); return; }
   if (password.length < 6) { showLoginError('Password must be at least 6 characters.'); return; }
 
@@ -546,7 +566,8 @@ async function handleSignUp() {
     const isFirstUser = await isFirstAccount();
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await setDoc(doc(db, 'users', cred.user.uid), {
-      name: name || email.split('@')[0],
+      name: name || loginName,
+      loginName,
       email,
       role: isFirstUser ? 'system_admin' : 'operations',
       department: isFirstUser ? 'Administration' : 'Operations',
@@ -576,13 +597,13 @@ function showLoginError(msg, isSuccess = false) {
 function friendlyAuthError(err) {
   const code = err && err.code ? err.code : '';
   const map = {
-    'auth/invalid-email': 'That email address looks invalid.',
+    'auth/invalid-email': 'That ID Number looks invalid. Use letters, numbers and dashes only.',
     'auth/user-disabled': 'This account has been disabled.',
-    'auth/user-not-found': 'No account found with that email.',
+    'auth/user-not-found': 'No account found with that ID Number.',
     'auth/wrong-password': 'Incorrect password.',
-    'auth/invalid-credential': 'Incorrect email or password.',
+    'auth/invalid-credential': 'Incorrect ID Number or password.',
     'auth/too-many-requests': 'Too many attempts. Please wait and try again.',
-    'auth/email-already-in-use': 'An account with that email already exists. Try signing in instead.',
+    'auth/email-already-in-use': 'An account with that ID Number already exists. Try signing in instead.',
     'auth/weak-password': 'Password must be at least 6 characters.',
     'auth/api-key-not-valid.-please-pass-a-valid-api-key.': 'Firebase rejected the API key in firebaseConfig. Double-check you copied it exactly from Project Settings > General > Your apps, with no missing characters or quotes.',
   };
@@ -7661,7 +7682,7 @@ function teamsTableHtml(users) {
     <div class="card overflow-x-auto">
       <table class="w-full text-sm">
         <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
-          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Email</th><th class="px-4 py-3">Department</th><th class="px-4 py-3">Role</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Created</th>
+          <th class="px-4 py-3">Name</th><th class="px-4 py-3">Login Name (ID)</th><th class="px-4 py-3">Department</th><th class="px-4 py-3">Role</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Created</th>
         </tr></thead>
         <tbody>
           ${users.map(u => {
@@ -7670,7 +7691,7 @@ function teamsTableHtml(users) {
             return `
               <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
                 <td class="px-4 py-3 font-medium text-charcoal">${u.name || '—'}</td>
-                <td class="px-4 py-3">${u.email || '—'}</td>
+                <td class="px-4 py-3 font-mono text-xs">${u.loginName || loginNameFromEmail(u.email) || u.email || '—'}</td>
                 <td class="px-4 py-3">${u.department || '—'}</td>
                 <td class="px-4 py-3">
                   <select data-team-role="${u.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
@@ -8287,7 +8308,8 @@ async function ensureUserProfile(user) {
   // first-account-becomes-admin rule applies here too.
   const isFirstUser = await isFirstAccount();
   const profile = {
-    name: user.email.split('@')[0],
+    name: loginNameFromEmail(user.email) || user.email.split('@')[0],
+    loginName: loginNameFromEmail(user.email) || null,
     email: user.email,
     role: isFirstUser ? 'system_admin' : 'operations',
     department: isFirstUser ? 'Administration' : 'Operations',
