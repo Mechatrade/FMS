@@ -1920,7 +1920,9 @@ function wireQuickStatusSelects(onChangeReload) {
 }
 
 /* ---- Pages ---- */
+let poPulledFromCRM = false;
 function renderNewClientPOPage() {
+  poPulledFromCRM = false;
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">New Client PO</h1>
@@ -1928,8 +1930,9 @@ function renderNewClientPOPage() {
     </div>
 
     <div class="card p-5 mb-6 max-w-4xl">
-      <h2 class="text-sm font-semibold text-charcoal mb-1">Pull from CRM</h2>
+      <h2 class="text-sm font-semibold text-charcoal mb-1">Pull from CRM <span class="font-normal text-muted">(optional)</span></h2>
       <p class="text-xs text-muted mb-3">Enter the CRM Quotation Control No. from the won Sales Order to auto-fill the fields below. Everything stays editable before you save.</p>
+      <p class="text-xs text-charcoal bg-cream rounded-md px-3 py-2 mb-3">POs that were not entered in CRM: skip this box and fill in the form below by hand. Only the fields marked * are required.</p>
       <div class="flex flex-wrap gap-2">
         <input id="crm-pull-input" type="text" placeholder="e.g. CN-S-2026-09-00001"
           class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
@@ -2076,6 +2079,7 @@ function wireCRMPullButton() {
 }
 
 function fillPOFormFromCRM(so) {
+  poPulledFromCRM = true;
   const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
 
   setVal('clientName', so.billedTo && so.billedTo.name);
@@ -2141,6 +2145,7 @@ async function handleCreatePOSubmit(e) {
 
   try {
     data.status = 'Open';
+    data.source = poPulledFromCRM ? 'CRM' : 'Manual';
     await createClientPO(data);
     navigateTo('client-orders/open-pos');
   } catch (err) {
@@ -2405,6 +2410,7 @@ async function renderClientPOViewPage(id) {
           ${field('Client Name', escapeAttr(po.clientName))}
           ${field('Client PO Number', escapeAttr(po.clientPONumber))}
           ${field('PO Type', escapeAttr(po.poType))}
+          ${field('Source', escapeAttr(po.source || ((po.crmControlNumber || po.crmSalesOrderNumber) ? 'CRM' : null)))}
           ${field('Priority', escapeAttr(po.priority))}
           ${field('Project / Reference / Description', escapeAttr(po.projectDescription))}
           ${field('PO Amount', formatCurrency(po.poAmount))}
@@ -8641,4 +8647,4 @@ async function bootstrap() {
 bootstrap();
 </script>
 </body>
-</html> 
+</html>
