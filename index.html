@@ -1680,6 +1680,118 @@ function fillSupplierFormFromCRM(s) {
 }
 
 /* ---- Reusable form field builders ---- */
+/* ---- Standard client list for Client PO ----
+   One searchable list so every PO uses the same spelling of a client:
+   CRM customers (and clients on CRM sales orders), FMS-only clients added with "+ New",
+   and client names already used on existing POs. */
+let clientListCache = null;
+const normClientName = (n) => String(n || '').replace(/\s+/g, ' ').trim();
+function addToClientCache(name, source) {
+  const n = normClientName(name);
+  if (!n || !clientListCache) return;
+  const k = n.toLowerCase();
+  if (!clientListCache.has(k)) clientListCache.set(k, { name: n, source });
+}
+async function loadClientList(force = false) {
+  if (clientListCache && !force) return clientListCache;
+  const map = new Map();
+  clientListCache = map;
+  if (crmReady && crmDb) {
+    try {
+      const snap = await getDocs(collection(crmDb, 'customers'));
+      snap.docs.forEach(d => { const c = d.data(); addToClientCache(c.name || c.companyName || c.customerName || c.company, 'CRM'); });
+    } catch (e) { console.warn('CRM customers not readable (using sales orders instead):', e.code || e); }
+    try {
+      const snap = await getDocs(collection(crmDb, 'salesorders'));
+      snap.docs.forEach(d => { const so = d.data(); addToClientCache(so.billedTo && so.billedTo.name, 'CRM'); });
+    } catch (e) { console.warn('CRM sales orders not readable for client list:', e.code || e); }
+  }
+  try { (await fetchFinanceCollection('clients')).forEach(c => addToClientCache(c.name, 'Non-CRM')); } catch (e) { console.warn('FMS clients not readable:', e.code || e); }
+  try { (await fetchFinanceCollection('clientPOs')).forEach(po => addToClientCache(po.clientName, 'Existing PO')); } catch (e) { console.warn(e); }
+  return map;
+}
+// Returns the standard spelling of a client, or null if it isn't on the list.
+async function resolveClientName(typed, original) {
+  const n = normClientName(typed);
+  if (!n) return null;
+  const list = await loadClientList();
+  const hit = list.get(n.toLowerCase());
+  if (hit) return hit.name;
+  if (original && normClientName(original).toLowerCase() === n.toLowerCase()) return normClientName(original);
+  return null;
+}
+function clientNameFieldHtml(value) {
+  return `
+    <div>
+      <label class="block text-sm font-medium text-charcoal mb-1.5">Client Name <span class="text-red-500">*</span></label>
+      <div class="flex gap-2">
+        <input id="field-clientName" type="text" required list="client-name-list" autocomplete="off" value="${escapeAttr(value)}" placeholder="Select or type to search"
+          class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+        <button type="button" id="add-client-btn" class="btn-glass-sm shrink-0">+ New</button>
+      </div>
+      <datalist id="client-name-list"></datalist>
+      <p class="text-xs text-muted mt-1.5">Pick from the list (CRM and non-CRM clients) so names stay consistent. Not listed? Click + New.</p>
+    </div>`;
+}
+function wireClientNameField() {
+  const input = document.getElementById('field-clientName');
+  if (!input) return;
+  const fillList = (map) => {
+    const dl = document.getElementById('client-name-list');
+    if (!dl) return;
+    dl.innerHTML = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
+      .map(c => `<option value="${escapeAttr(c.name)}" label="${escapeAttr(c.source)}"></option>`).join('');
+  };
+  loadClientList().then(fillList);
+  // snap to the standard spelling when the user leaves the box
+  input.addEventListener('blur', async () => {
+    const hit = (await loadClientList()).get(normClientName(input.value).toLowerCase());
+    if (hit) input.value = hit.name;
+  });
+  document.getElementById('add-client-btn')?.addEventListener('click', () => openAddClientModal(input, fillList));
+}
+function openAddClientModal(input, fillList) {
+  document.getElementById('add-client-modal')?.remove();
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="add-client-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div class="w-full max-w-sm bg-white rounded-xl shadow-card border border-borderc p-6">
+        <h2 class="text-base font-semibold text-charcoal mb-1">Add Non-CRM Client</h2>
+        <p class="text-xs text-muted mb-3">Use the client's full registered name. It will appear in the list for everyone.</p>
+        <div id="add-client-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 mb-3"></div>
+        <input id="add-client-name" type="text" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" placeholder="e.g. ABC Philippines Inc." />
+        <div class="flex justify-end gap-2 pt-4">
+          <button type="button" id="add-client-cancel" class="rounded-md border border-borderc px-4 py-2 text-sm text-charcoal hover:bg-cream">Cancel</button>
+          <button type="button" id="add-client-save" class="rounded-md bg-forest px-4 py-2 text-sm font-medium text-white hover:bg-forest-dark disabled:opacity-60">Add Client</button>
+        </div>
+      </div>
+    </div>`);
+  const close = () => document.getElementById('add-client-modal')?.remove();
+  document.getElementById('add-client-cancel').addEventListener('click', close);
+  document.getElementById('add-client-name').focus();
+  document.getElementById('add-client-save').addEventListener('click', async () => {
+    const name = normClientName(document.getElementById('add-client-name').value);
+    const err = document.getElementById('add-client-error');
+    if (!name) { err.textContent = 'Enter the client name.'; err.classList.remove('hidden'); return; }
+    const list = await loadClientList();
+    const existing = list.get(name.toLowerCase());
+    if (existing) { input.value = existing.name; close(); return; } // already listed: just select it
+    const btn = document.getElementById('add-client-save');
+    btn.disabled = true;
+    try {
+      await createFinanceDoc('clients', { name, source: 'Non-CRM' });
+      addToClientCache(name, 'Non-CRM');
+      fillList(await loadClientList());
+      input.value = name;
+      close();
+    } catch (e) {
+      console.error(e);
+      err.textContent = 'Could not save the client. Please try again.';
+      err.classList.remove('hidden');
+      btn.disabled = false;
+    }
+  });
+}
+
 function textField(name, label, opts = {}) {
   const span = opts.span2 ? 'sm:col-span-2' : '';
   return `
@@ -1949,7 +2061,7 @@ function renderNewClientPOPage() {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${textField('clientName', 'Client Name', { required: true })}
+          ${clientNameFieldHtml('')}
           ${textField('clientPONumber', 'Client PO Number', { required: true, hint: 'The PO number the client issued — this is our reference.' })}
           ${selectField('poType', 'PO Type', PO_TYPES, { required: true })}
           ${selectField('priority', 'Priority', PO_PRIORITIES, { value: 'Normal' })}
@@ -2025,6 +2137,7 @@ function renderNewClientPOPage() {
   applyPendingCRMPull();
   document.getElementById('po-form').addEventListener('submit', handleCreatePOSubmit);
   injectPOFilesFolderButton();
+  wireClientNameField();
 }
 
 function crmPullResultHtml(so) {
@@ -2082,7 +2195,8 @@ function fillPOFormFromCRM(so) {
   poPulledFromCRM = true;
   const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
 
-  setVal('clientName', so.billedTo && so.billedTo.name);
+  if (so.billedTo && so.billedTo.name) addToClientCache(so.billedTo.name, 'CRM');
+  setVal('clientName', so.billedTo && so.billedTo.name && normClientName(so.billedTo.name));
   setVal('clientPONumber', so.poNumber);
   setVal('dateReceived', so.poDate);
   // Quotation Control No. = the quotation's control number carried on the sales order,
@@ -2139,6 +2253,13 @@ async function handleCreatePOSubmit(e) {
     errBox.classList.remove('hidden');
     return;
   }
+  const stdClient = await resolveClientName(data.clientName, '');
+  if (!stdClient) {
+    errBox.textContent = 'Please pick the Client Name from the list. If the client is not listed, click + New to add it.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  data.clientName = stdClient;
 
   btn.disabled = true;
   btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
@@ -2511,7 +2632,7 @@ async function renderClientPOEditPage(id) {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${textField('clientName', 'Client Name', { required: true, value: po.clientName })}
+          ${clientNameFieldHtml(po.clientName)}
           ${textField('clientPONumber', 'Client PO Number', { required: true, value: po.clientPONumber, hint: 'The PO number the client issued — this is our reference.' })}
           ${selectField('poType', 'PO Type', PO_TYPES, { required: true, value: po.poType })}
           ${selectField('priority', 'Priority', PO_PRIORITIES, { value: po.priority || 'Normal' })}
@@ -2603,6 +2724,8 @@ async function renderClientPOEditPage(id) {
   wirePaymentTermsField();
   document.getElementById('po-form').addEventListener('submit', (e) => handleUpdatePOSubmit(e, id));
   injectPOFilesFolderButton();
+  window.__poOriginalClient = po.clientName || '';
+  wireClientNameField();
 }
 
 async function handleUpdatePOSubmit(e, id) {
@@ -2623,6 +2746,13 @@ async function handleUpdatePOSubmit(e, id) {
     errBox.classList.remove('hidden');
     return;
   }
+  const stdClient = await resolveClientName(data.clientName, window.__poOriginalClient || '');
+  if (!stdClient) {
+    errBox.textContent = 'Please pick the Client Name from the list. If the client is not listed, click + New to add it.';
+    errBox.classList.remove('hidden');
+    return;
+  }
+  data.clientName = stdClient;
 
   btn.disabled = true;
   btnText.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>`;
