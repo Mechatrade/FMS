@@ -296,6 +296,7 @@ const NAV = [
     description: "System configuration, users, roles, permissions and numbering.",
     children: [
       { name: "Teams", path: "settings/users-roles", description: "Manage staff accounts and roles." },
+      { name: "Customer List", path: "settings/customer-list", description: "Master list of CRM accounts, leads and non-CRM customers used by every Client Name dropdown." },
       { name: "Approval Rules", path: "settings/approval-rules", description: "Configure approval workflows." },
       { name: "Chart of Accounts", path: "settings/chart-of-accounts", description: "Manage the company's account structure." },
       { name: "Tax Settings", path: "settings/tax", description: "Configure tax settings." },
@@ -1328,6 +1329,10 @@ function renderRoute() {
     renderTeamsPage();
     return;
   }
+  if (path === 'settings/customer-list') {
+    renderCustomerListPage();
+    return;
+  }
   if (path === 'settings/audit-logs') {
     renderActivityLogPage();
     return;
@@ -1705,28 +1710,10 @@ async function loadClientList(force = false) {
   if (clientListCache && !force) return clientListCache;
   const map = new Map();
   clientListCache = map;
-  if (crmReady && crmDb) {
-    // CRM customers (the 'accounts' collection) and leads. Any collection that can't be read is skipped.
-    const nameKeys = ['company', 'companyName', 'name', 'accountName', 'customerName', 'businessName', 'clientName', 'organization'];
-    for (const [coll, label] of [['accounts', 'CRM'], ['leads', 'CRM Lead']]) {
-      try {
-        const snap = await getDocs(collection(crmDb, coll));
-        let found = 0;
-        snap.docs.forEach(d => {
-          const c = d.data();
-          const k = nameKeys.find(key => typeof c[key] === 'string' && c[key].trim());
-          if (k) { addToClientCache(c[k], label, holderOf(c)); found++; }
-        });
-        console.info('Client list: ' + found + ' from CRM ' + coll);
-      } catch (e) { console.warn('CRM ' + coll + ' not readable for the client list:', e.code || e); }
-    }
-    try {
-      const snap = await getDocs(collection(crmDb, 'salesorders'));
-      snap.docs.forEach(d => { const so = d.data(); addToClientCache(so.billedTo && so.billedTo.name, 'CRM', holderOf(so)); });
-    } catch (e) { console.warn('CRM sales orders not readable for client list:', e.code || e); }
-  }
-  try { (await fetchFinanceCollection('clients')).forEach(c => addToClientCache(c.name, 'Non-CRM', c.department)); } catch (e) { console.warn('FMS clients not readable:', e.code || e); }
-  try { (await fetchFinanceCollection('clientPOs')).forEach(po => addToClientCache(po.clientName, 'Existing PO', '')); } catch (e) { console.warn(e); }
+  // The single source for every Client Name dropdown: Settings > Customer List (active customers only).
+  try {
+    (await fetchFinanceCollection('clients')).forEach(c => { if (c.isActive !== false) addToClientCache(c.name, c.source || 'Non-CRM', c.department); });
+  } catch (e) { console.warn('Customer List not readable:', e.code || e); }
   return map;
 }
 // Returns the standard spelling of a client, or null if it isn't on the list.
@@ -1749,7 +1736,7 @@ function clientNameFieldHtml(value) {
         <button type="button" id="add-client-btn" class="btn-glass-sm shrink-0">+ New</button>
       </div>
       <datalist id="client-name-list"></datalist>
-      <p class="text-xs text-muted mt-1.5">Pick from the list (CRM and non-CRM clients) so names stay consistent. Not listed? Click + New.</p>
+      <p class="text-xs text-muted mt-1.5">Pick from the list so names stay consistent. Not listed? Click + New (or see Settings &gt; Customer List).</p>
     </div>`;
 }
 function wireClientNameField() {
@@ -1759,7 +1746,7 @@ function wireClientNameField() {
     const dl = document.getElementById('client-name-list');
     if (!dl) return;
     dl.innerHTML = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-      .map(c => `<option value="${escapeAttr(c.name)}"${c.holder ? ` label="${escapeAttr(c.holder)}"` : ''}></option>`).join('');
+      .map(c => `<option value="${escapeAttr(c.name)}"></option>`).join('');
   };
   loadClientList().then(fillList);
   // snap to the standard spelling when the user leaves the box
@@ -1799,7 +1786,7 @@ function openAddClientModal(input, fillList) {
     btn.disabled = true;
     try {
       const holder = normClientName(document.getElementById('add-client-holder').value);
-      await createFinanceDoc('clients', { name, department: holder, source: 'Non-CRM' });
+      await createFinanceDoc('clients', { name, department: holder, source: 'Non-CRM', isActive: true });
       addToClientCache(name, 'Non-CRM', holder);
       fillList(await loadClientList());
       input.value = name;
@@ -2216,7 +2203,7 @@ function fillPOFormFromCRM(so) {
   poPulledFromCRM = true;
   const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
 
-  if (so.billedTo && so.billedTo.name) addToClientCache(so.billedTo.name, 'CRM', holderOf(so));
+  if (so.billedTo && so.billedTo.name) { addToClientCache(so.billedTo.name, 'CRM Sales Order', holderOf(so)); ensureCustomerExists(so.billedTo.name, 'CRM Sales Order', holderOf(so)); }
   setVal('clientName', so.billedTo && so.billedTo.name && normClientName(so.billedTo.name));
   setVal('clientPONumber', so.poNumber);
   setVal('dateReceived', so.poDate);
@@ -7966,6 +7953,180 @@ async function renderApprovalsPage() {
     console.error(e);
     document.getElementById('approvals-container').innerHTML = poLoadErrorHtml();
   }
+}
+
+/* ---- Customer List (Settings) ----
+   Master list behind every Client Name dropdown. Filled by pulling all CRM
+   Accounts and Leads, plus customers that are not in CRM. Stored in the
+   Firestore "clients" collection. */
+const CUSTOMER_NAME_KEYS = ['company', 'companyName', 'name', 'accountName', 'customerName', 'businessName', 'clientName', 'organization'];
+async function ensureCustomerExists(name, source, department) {
+  const n = normClientName(name);
+  if (!n || !db) return;
+  const list = await loadClientList();
+  if (list.has(n.toLowerCase())) return;
+  const id = 'so-' + n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+  try {
+    const ref = doc(db, 'clients', id);
+    if ((await getDoc(ref)).exists()) return; // already there (maybe switched off on purpose)
+    await setDoc(ref, { name: n, department: department || '', source, isActive: true, createdAt: serverTimestamp(), createdBy: currentUser ? currentUser.email : null });
+    addToClientCache(n, source, department);
+  } catch (e) { console.warn('Could not add customer to the list:', e.code || e); }
+}
+async function pullCRMCustomers() {
+  if (!crmReady || !crmDb) throw new Error('CRM connection is not configured.');
+  const existing = await fetchFinanceCollection('clients');
+  const have = new Set(existing.map(c => normClientName(c.name).toLowerCase()));
+  const found = [];
+  let readable = 0;
+  for (const [coll, source] of [['accounts', 'CRM Account'], ['leads', 'CRM Lead']]) {
+    try {
+      const snap = await getDocs(collection(crmDb, coll));
+      readable++;
+      snap.docs.forEach(d => {
+        const r = d.data();
+        const k = CUSTOMER_NAME_KEYS.find(key => typeof r[key] === 'string' && r[key].trim());
+        if (k) found.push({ id: `crm-${coll}-${d.id}`, name: normClientName(r[k]), department: holderOf(r), source, crmId: d.id });
+      });
+    } catch (e) { console.warn('CRM ' + coll + ' not readable:', e.code || e); }
+  }
+  if (!readable) throw new Error('CRM accounts and leads could not be read. In the CRM project, allow read on the accounts and leads collections in Firestore Rules.');
+  const toAdd = [];
+  let already = 0;
+  found.forEach(c => {
+    const k = c.name.toLowerCase();
+    if (have.has(k)) { already++; return; }
+    have.add(k);
+    toAdd.push(c);
+  });
+  for (let i = 0; i < toAdd.length; i += 20) {
+    await Promise.all(toAdd.slice(i, i + 20).map(c => setDoc(doc(db, 'clients', c.id), {
+      name: c.name, department: c.department, source: c.source, crmId: c.crmId, isActive: true,
+      createdAt: serverTimestamp(), createdBy: currentUser ? currentUser.email : null,
+    })));
+  }
+  clientListCache = null;
+  return { added: toAdd.length, accounts: toAdd.filter(c => c.source === 'CRM Account').length, leads: toAdd.filter(c => c.source === 'CRM Lead').length, already };
+}
+function openCustomerModal(existing, onDone) {
+  document.getElementById('customer-modal')?.remove();
+  const input = 'w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest';
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="customer-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div class="w-full max-w-sm bg-white rounded-xl shadow-card border border-borderc p-6">
+        <h2 class="text-base font-semibold text-charcoal mb-3">${existing ? 'Edit Non-CRM Customer' : 'Add Non-CRM Customer'}</h2>
+        <div id="customer-modal-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 mb-3"></div>
+        <label class="block text-sm font-medium text-charcoal mb-1.5">Customer Name</label>
+        <input id="cm-name" type="text" class="${input}" value="${escapeAttr(existing ? existing.name : '')}" placeholder="Full registered name" />
+        <label class="block text-sm font-medium text-charcoal mb-1.5 mt-3">Department</label>
+        <input id="cm-dept" type="text" class="${input}" value="${escapeAttr(existing ? existing.department : '')}" placeholder="e.g. Business Development" />
+        <div class="flex justify-end gap-2 pt-4">
+          <button type="button" id="cm-cancel" class="rounded-md border border-borderc px-4 py-2 text-sm text-charcoal hover:bg-cream">Cancel</button>
+          <button type="button" id="cm-save" class="rounded-md bg-forest px-4 py-2 text-sm font-medium text-white hover:bg-forest-dark disabled:opacity-60">Save</button>
+        </div>
+      </div>
+    </div>`);
+  const close = () => document.getElementById('customer-modal')?.remove();
+  document.getElementById('cm-cancel').addEventListener('click', close);
+  document.getElementById('cm-save').addEventListener('click', async () => {
+    const name = normClientName(document.getElementById('cm-name').value);
+    const department = normClientName(document.getElementById('cm-dept').value);
+    const err = document.getElementById('customer-modal-error');
+    const fail = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+    if (!name) { fail('Enter the customer name.'); return; }
+    const btn = document.getElementById('cm-save');
+    btn.disabled = true;
+    try {
+      const all = await fetchFinanceCollection('clients');
+      if (all.some(c => normClientName(c.name).toLowerCase() === name.toLowerCase() && (!existing || c.id !== existing.id))) { fail('That customer is already on the list.'); btn.disabled = false; return; }
+      if (existing) await updateFinanceDoc('clients', existing.id, { name, department });
+      else await createFinanceDoc('clients', { name, department, source: 'Non-CRM', isActive: true });
+      clientListCache = null;
+      close();
+      onDone();
+    } catch (e) { console.error(e); fail('Could not save. Please try again.'); btn.disabled = false; }
+  });
+}
+async function renderCustomerListPage() {
+  contentWrap(`
+    <div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-charcoal">Customer List</h1>
+        <p class="text-sm text-muted mt-1">The master list behind every Client Name dropdown in FMS. Pull all Accounts and Leads from CRM, and add customers that are not in CRM. Switch a customer to Inactive to hide it from the dropdowns.</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" id="cl-pull" class="btn-primary text-sm">Pull from CRM</button>
+        <button type="button" id="cl-add" class="rounded-md border border-borderc bg-white px-4 py-2.5 text-sm font-medium text-charcoal hover:bg-cream">+ Add Non-CRM Customer</button>
+      </div>
+    </div>
+    <div id="cl-result" class="mb-3 text-sm"></div>
+    <div class="flex flex-wrap gap-3 mb-4">
+      <input id="cl-search" type="text" placeholder="Search customer name..." class="flex-1 min-w-[220px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+      <select id="cl-source" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest">
+        <option value="">All sources</option><option value="CRM Account">CRM Account</option><option value="CRM Lead">CRM Lead</option><option value="CRM Sales Order">CRM Sales Order</option><option value="Non-CRM">Non-CRM</option>
+      </select>
+    </div>
+    <div id="cl-list" class="text-sm text-muted">Loading...</div>`);
+  let rows = [];
+  const draw = () => {
+    const q = document.getElementById('cl-search').value.trim().toLowerCase();
+    const src = document.getElementById('cl-source').value;
+    const shown = rows.filter(c => (!q || String(c.name || '').toLowerCase().includes(q)) && (!src || (c.source || 'Non-CRM') === src))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    const box = document.getElementById('cl-list');
+    if (!rows.length) { box.innerHTML = `<div class="card text-center py-12 px-6 text-sm text-muted">No customers yet. Click <span class="font-medium text-charcoal">Pull from CRM</span> to bring in all CRM Accounts and Leads.</div>`; return; }
+    box.innerHTML = `
+      <p class="text-xs text-muted mb-2">${shown.length} of ${rows.length} customers</p>
+      <div class="card overflow-x-auto"><table class="w-full text-sm">
+        <thead><tr class="border-b border-borderc text-left text-xs text-muted uppercase tracking-wide">
+          <th class="px-4 py-3">Customer Name</th><th class="px-4 py-3">Source</th><th class="px-4 py-3">Department</th><th class="px-4 py-3">Status</th><th class="px-4 py-3"></th>
+        </tr></thead>
+        <tbody>${shown.map(c => `
+          <tr class="border-b border-borderc last:border-0 hover:bg-cream/50">
+            <td class="px-4 py-3 font-medium text-charcoal">${escapeAttr(c.name)}</td>
+            <td class="px-4 py-3">${escapeAttr(c.source || 'Non-CRM')}</td>
+            <td class="px-4 py-3">${escapeAttr(c.department) || '—'}</td>
+            <td class="px-4 py-3"><select data-cl-status="${c.id}" class="text-xs border border-borderc rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-forest">
+              <option value="true" ${c.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${c.isActive === false ? 'selected' : ''}>Inactive</option></select></td>
+            <td class="px-4 py-3 text-right">${(c.source || 'Non-CRM') === 'Non-CRM' ? `<button type="button" data-cl-edit="${c.id}" class="text-xs text-forest hover:underline">Edit</button>` : ''}</td>
+          </tr>`).join('')}</tbody></table></div>`;
+    box.querySelectorAll('[data-cl-status]').forEach(sel => sel.addEventListener('change', async () => {
+      sel.disabled = true;
+      try {
+        await updateFinanceDoc('clients', sel.getAttribute('data-cl-status'), { isActive: sel.value === 'true' });
+        const row = rows.find(r => r.id === sel.getAttribute('data-cl-status')); if (row) row.isActive = sel.value === 'true';
+        clientListCache = null;
+      } catch (e) { console.error(e); alert('Could not update this customer. Please try again.'); }
+      sel.disabled = false;
+    }));
+    box.querySelectorAll('[data-cl-edit]').forEach(b => b.addEventListener('click', () => {
+      const row = rows.find(r => r.id === b.getAttribute('data-cl-edit'));
+      if (row) openCustomerModal(row, load);
+    }));
+  };
+  const load = async () => {
+    try { rows = await fetchFinanceCollection('clients'); draw(); }
+    catch (e) { console.error(e); document.getElementById('cl-list').innerHTML = poLoadErrorHtml(); }
+  };
+  document.getElementById('cl-search').addEventListener('input', draw);
+  document.getElementById('cl-source').addEventListener('change', draw);
+  document.getElementById('cl-add').addEventListener('click', () => openCustomerModal(null, load));
+  document.getElementById('cl-pull').addEventListener('click', async () => {
+    const btn = document.getElementById('cl-pull');
+    const out = document.getElementById('cl-result');
+    btn.disabled = true; btn.textContent = 'Pulling from CRM...';
+    out.innerHTML = '';
+    try {
+      const r = await pullCRMCustomers();
+      out.innerHTML = `<div class="border border-forest/30 bg-forest/5 rounded-md px-3 py-2 text-charcoal">Added ${r.added} new customer${r.added === 1 ? '' : 's'} (${r.accounts} accounts, ${r.leads} leads). ${r.already} already on the list.</div>`;
+      await load();
+    } catch (e) {
+      console.error(e);
+      out.innerHTML = `<div class="bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2">${escapeAttr(e.message || 'Could not pull from CRM.')}</div>`;
+    }
+    btn.disabled = false; btn.textContent = 'Pull from CRM';
+  });
+  load();
 }
 
 /* ---- Teams (Settings > Teams) — staff accounts and role management ---- */
