@@ -1470,11 +1470,11 @@ function renderEmptyContent(title, msg) {
    CLIENT ORDERS MODULE  (Firestore-backed: collection "clientPOs")
    ========================================================================== */
 const PO_COLLECTION = 'clientPOs';
-const PO_STATUSES = ['Open', 'Preparing', 'Partial Delivery', 'Complete Delivery', 'Ready for Billing', 'On Hold', 'Cancelled'];
+const PO_STATUSES = ['Open', 'Preparing', 'Partial Delivery', 'Complete Delivery', 'Ready for Billing', 'Completed', 'On Hold', 'Cancelled'];
 const PO_OPEN_STATUSES = ['Open', 'Preparing'];
 const PO_DELIVERY_STATUSES = ['Preparing', 'Partial Delivery', 'Complete Delivery'];
-const PO_OPEN_QUICK_STATUSES = ['Open', 'Preparing', 'On Hold', 'Cancelled'];
-const PO_DELIVERY_QUICK_STATUSES = ['Preparing', 'Partial Delivery', 'Complete Delivery', 'On Hold', 'Cancelled'];
+const PO_OPEN_QUICK_STATUSES = ['Open', 'Preparing', 'Completed', 'On Hold', 'Cancelled'];
+const PO_DELIVERY_QUICK_STATUSES = ['Preparing', 'Partial Delivery', 'Complete Delivery', 'Completed', 'On Hold', 'Cancelled'];
 const PO_TYPES = ['Goods', 'Service', 'Installation'];
 const PO_PRIORITIES = ['Normal', 'Urgent'];
 
@@ -1485,6 +1485,7 @@ function statusBadgeClass(status) {
     'Partial Delivery': 'bg-orange-50 text-orange-700 border-orange-200',
     'Complete Delivery': 'bg-teal-50 text-teal-700 border-teal-200',
     'Ready for Billing': 'bg-forest/10 text-forest border-forest/30',
+    'Completed': 'bg-green-50 text-green-700 border-green-200',
     'On Hold': 'bg-gray-100 text-gray-600 border-gray-300',
     'Cancelled': 'bg-red-50 text-red-600 border-red-200',
     'Partially Received': 'bg-orange-50 text-orange-700 border-orange-200',
@@ -1532,7 +1533,7 @@ function calcCommitmentDate(dateReceivedISO, leadTimeValue, leadTimeUnit) {
 }
 function isOverdue(po) {
   if (!po.commitmentDeliveryDate) return false;
-  if (['Complete Delivery', 'Ready for Billing', 'Cancelled'].includes(po.status)) return false;
+  if (['Complete Delivery', 'Ready for Billing', 'Completed', 'Cancelled'].includes(po.status)) return false;
   return po.commitmentDeliveryDate < todayISO();
 }
 function escapeAttr(str) {
@@ -2207,15 +2208,11 @@ function fillPOFormFromCRM(so) {
   setVal('clientName', so.billedTo && so.billedTo.name && normClientName(so.billedTo.name));
   setVal('clientPONumber', so.poNumber);
   setVal('dateReceived', so.poDate);
-  // Quotation Control No. = the quotation's control number carried on the sales order,
-  // NOT the sales order's own controlNo. Matched by field name (anything like quotation...control).
-  const qKey = Object.keys(so).find(k => /quot\w*(control|ctrl)/i.test(k) && typeof so[k] === 'string' && so[k].trim());
-  setVal('crmControlNumber', qKey ? so[qKey] : '');
+  // CRM builds a sales order as orderNo = "SO-" + the quotation's own number (quoteNo), and its
+  // controlNo is a separate control number. The quotation number is what goes in this field.
+  const quoteNo = (typeof so.quoteNo === 'string' && so.quoteNo.trim()) || String(so.orderNo || '').replace(/^SO-/i, '').trim();
+  setVal('crmControlNumber', quoteNo);
   setVal('crmSalesOrderNumber', so.orderNo || '');
-  if (!qKey) {
-    const box = document.getElementById('crm-pull-result');
-    if (box) box.insertAdjacentHTML('beforeend', `<p class="text-xs text-amber-700 mt-2">Quotation Control No. wasn't found on this CRM sales order, so it was left blank. Type it in under References.</p>`);
-  }
   setVal('clientContactPerson', so.billedTo && so.billedTo.contactName);
   setVal('clientContactNumber', so.billedTo && so.billedTo.phone);
   setVal('poAmount', so.total);
@@ -2451,7 +2448,7 @@ async function renderPOMonitoringPage() {
     const inDeliveryCount = all.filter(p => PO_DELIVERY_STATUSES.includes(p.status)).length;
     const readyCount = all.filter(p => p.status === 'Ready for Billing').length;
     const overdueCount = all.filter(isOverdue).length;
-    const openValue = all.filter(p => !['Ready for Billing', 'Cancelled'].includes(p.status)).reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
+    const openValue = all.filter(p => !['Ready for Billing', 'Completed', 'Cancelled'].includes(p.status)).reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
 
     const cards = [
       { label: 'Open POs', value: openCount, icon: 'inbox' },
