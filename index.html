@@ -1686,28 +1686,47 @@ function fillSupplierFormFromCRM(s) {
    and client names already used on existing POs. */
 let clientListCache = null;
 const normClientName = (n) => String(n || '').replace(/\s+/g, ' ').trim();
-function addToClientCache(name, source) {
+// The department of the CRM record (e.g. "Business Development"), shown beside the client name.
+function holderOf(rec) {
+  if (!rec) return '';
+  const v = rec.department || rec.dept;
+  return typeof v === 'string' ? v.trim() : '';
+}
+function addToClientCache(name, source, holder) {
   const n = normClientName(name);
   if (!n || !clientListCache) return;
   const k = n.toLowerCase();
-  if (!clientListCache.has(k)) clientListCache.set(k, { name: n, source });
+  const h = normClientName(holder);
+  const cur = clientListCache.get(k);
+  if (!cur) clientListCache.set(k, { name: n, source, holder: h });
+  else if (!cur.holder && h) cur.holder = h;
 }
 async function loadClientList(force = false) {
   if (clientListCache && !force) return clientListCache;
   const map = new Map();
   clientListCache = map;
   if (crmReady && crmDb) {
-    try {
-      const snap = await getDocs(collection(crmDb, 'customers'));
-      snap.docs.forEach(d => { const c = d.data(); addToClientCache(c.name || c.companyName || c.customerName || c.company, 'CRM'); });
-    } catch (e) { console.warn('CRM customers not readable (using sales orders instead):', e.code || e); }
+    // CRM customers (the 'accounts' collection) and leads. Any collection that can't be read is skipped.
+    const nameKeys = ['company', 'companyName', 'name', 'accountName', 'customerName', 'businessName', 'clientName', 'organization'];
+    for (const [coll, label] of [['accounts', 'CRM'], ['leads', 'CRM Lead']]) {
+      try {
+        const snap = await getDocs(collection(crmDb, coll));
+        let found = 0;
+        snap.docs.forEach(d => {
+          const c = d.data();
+          const k = nameKeys.find(key => typeof c[key] === 'string' && c[key].trim());
+          if (k) { addToClientCache(c[k], label, holderOf(c)); found++; }
+        });
+        console.info('Client list: ' + found + ' from CRM ' + coll);
+      } catch (e) { console.warn('CRM ' + coll + ' not readable for the client list:', e.code || e); }
+    }
     try {
       const snap = await getDocs(collection(crmDb, 'salesorders'));
-      snap.docs.forEach(d => { const so = d.data(); addToClientCache(so.billedTo && so.billedTo.name, 'CRM'); });
+      snap.docs.forEach(d => { const so = d.data(); addToClientCache(so.billedTo && so.billedTo.name, 'CRM', holderOf(so)); });
     } catch (e) { console.warn('CRM sales orders not readable for client list:', e.code || e); }
   }
-  try { (await fetchFinanceCollection('clients')).forEach(c => addToClientCache(c.name, 'Non-CRM')); } catch (e) { console.warn('FMS clients not readable:', e.code || e); }
-  try { (await fetchFinanceCollection('clientPOs')).forEach(po => addToClientCache(po.clientName, 'Existing PO')); } catch (e) { console.warn(e); }
+  try { (await fetchFinanceCollection('clients')).forEach(c => addToClientCache(c.name, 'Non-CRM', c.department)); } catch (e) { console.warn('FMS clients not readable:', e.code || e); }
+  try { (await fetchFinanceCollection('clientPOs')).forEach(po => addToClientCache(po.clientName, 'Existing PO', '')); } catch (e) { console.warn(e); }
   return map;
 }
 // Returns the standard spelling of a client, or null if it isn't on the list.
@@ -1740,7 +1759,7 @@ function wireClientNameField() {
     const dl = document.getElementById('client-name-list');
     if (!dl) return;
     dl.innerHTML = [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-      .map(c => `<option value="${escapeAttr(c.name)}" label="${escapeAttr(c.source)}"></option>`).join('');
+      .map(c => `<option value="${escapeAttr(c.name)}"${c.holder ? ` label="${escapeAttr(c.holder)}"` : ''}></option>`).join('');
   };
   loadClientList().then(fillList);
   // snap to the standard spelling when the user leaves the box
@@ -1758,7 +1777,8 @@ function openAddClientModal(input, fillList) {
         <h2 class="text-base font-semibold text-charcoal mb-1">Add Non-CRM Client</h2>
         <p class="text-xs text-muted mb-3">Use the client's full registered name. It will appear in the list for everyone.</p>
         <div id="add-client-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2 mb-3"></div>
-        <input id="add-client-name" type="text" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" placeholder="e.g. ABC Philippines Inc." />
+        <input id="add-client-name" type="text" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" placeholder="Company Name, e.g. ABC Philippines Inc." />
+        <input id="add-client-holder" type="text" class="w-full rounded-md border border-borderc bg-white px-3 py-2.5 text-sm mt-3 focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" placeholder="Department, e.g. Business Development" />
         <div class="flex justify-end gap-2 pt-4">
           <button type="button" id="add-client-cancel" class="rounded-md border border-borderc px-4 py-2 text-sm text-charcoal hover:bg-cream">Cancel</button>
           <button type="button" id="add-client-save" class="rounded-md bg-forest px-4 py-2 text-sm font-medium text-white hover:bg-forest-dark disabled:opacity-60">Add Client</button>
@@ -1778,8 +1798,9 @@ function openAddClientModal(input, fillList) {
     const btn = document.getElementById('add-client-save');
     btn.disabled = true;
     try {
-      await createFinanceDoc('clients', { name, source: 'Non-CRM' });
-      addToClientCache(name, 'Non-CRM');
+      const holder = normClientName(document.getElementById('add-client-holder').value);
+      await createFinanceDoc('clients', { name, department: holder, source: 'Non-CRM' });
+      addToClientCache(name, 'Non-CRM', holder);
       fillList(await loadClientList());
       input.value = name;
       close();
@@ -2195,7 +2216,7 @@ function fillPOFormFromCRM(so) {
   poPulledFromCRM = true;
   const setVal = (id, value) => { const el = document.getElementById('field-' + id); if (el && value != null) el.value = value; };
 
-  if (so.billedTo && so.billedTo.name) addToClientCache(so.billedTo.name, 'CRM');
+  if (so.billedTo && so.billedTo.name) addToClientCache(so.billedTo.name, 'CRM', holderOf(so));
   setVal('clientName', so.billedTo && so.billedTo.name && normClientName(so.billedTo.name));
   setVal('clientPONumber', so.poNumber);
   setVal('dateReceived', so.poDate);
