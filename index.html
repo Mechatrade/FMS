@@ -1375,40 +1375,97 @@ function contentWrap(inner) {
   if (c) c.innerHTML = `<div class="fade-in max-w-full">${inner}</div>`;
 }
 
-function renderDashboard() {
-  const cards = [
-    { label: 'Cash Position', value: '₱ 4,285,300', icon: 'wallet', tone: 'text-forest' },
-    { label: 'Accounts Receivable', value: '₱ 1,972,450', icon: 'arrow-down-to-line', tone: 'text-charcoal' },
-    { label: 'Accounts Payable', value: '₱ 863,120', icon: 'arrow-up-from-line', tone: 'text-charcoal' },
-    { label: 'Current Month Revenue', value: '₱ 3,104,880', icon: 'trending-up', tone: 'text-forest' },
-    { label: 'Pending Approvals', value: '12', icon: 'clock', tone: 'text-charcoal' },
-    { label: 'Open Purchase Orders', value: '27', icon: 'shopping-cart', tone: 'text-charcoal' },
-    { label: 'Outstanding Invoices', value: '34', icon: 'receipt', tone: 'text-charcoal' },
-  ];
+/* ---- Dashboard: live figures from FMS data ----
+   Finance roles see the money cards. Other roles only see operational counts,
+   so nobody outside Finance sees cash, receivables, payables or revenue. */
+function dashboardRoleSeesFinance() {
+  const r = currentProfile && currentProfile.role;
+  return ['system_admin', 'super_admin', 'admin', 'finance_manager', 'management', 'finance_staff'].includes(r);
+}
+async function renderDashboard() {
+  const finance = dashboardRoleSeesFinance();
+  const today = todayISO();
+  const month = today.slice(0, 7);
+  const memo = {};
+  const get = (key, fn) => memo[key] || (memo[key] = fn());
+  const peso = (n) => formatCurrency(n);
+  const balanceOf = (rec) => { const b = Number(rec.balance); return Number.isFinite(b) ? b : 0; };
+
+  const cashCard = { label: 'Cash Position', icon: 'wallet', tone: 'text-forest', href: 'cash-management/cash-position', load: async () => {
+    const accounts = await get('banks', () => fetchFinanceCollection('bankAccounts'));
+    const balances = await computeBankAccountBalances(accounts);
+    return { value: peso(accounts.reduce((sum, b) => sum + (balances[b.id] || 0), 0)), sub: `${accounts.length} bank account${accounts.length === 1 ? '' : 's'}` };
+  } };
+  const arCard = { label: 'Accounts Receivable', icon: 'arrow-down-to-line', tone: 'text-charcoal', href: 'finance/accounts-receivable', load: async () => {
+    const open = (await get('ar', () => fetchFinanceCollection('accountsReceivable'))).filter(ar => balanceOf(ar) > 0.005 && ar.status !== 'Cancelled');
+    return { value: peso(open.reduce((sum, ar) => sum + balanceOf(ar), 0)), sub: 'unpaid balance' };
+  } };
+  const apCard = { label: 'Accounts Payable', icon: 'arrow-up-from-line', tone: 'text-charcoal', href: 'finance/accounts-payable', load: async () => {
+    const open = (await get('ap', () => fetchFinanceCollection('accountsPayable'))).filter(ap => balanceOf(ap) > 0.005 && ap.status !== 'Cancelled');
+    return { value: peso(open.reduce((sum, ap) => sum + balanceOf(ap), 0)), sub: `${open.length} unpaid bill${open.length === 1 ? '' : 's'}` };
+  } };
+  const revenueCard = { label: 'Current Month Revenue', icon: 'trending-up', tone: 'text-forest', href: 'finance/sales-recognition', load: async () => {
+    const recs = (await get('sr', () => fetchFinanceCollection('salesRecognitions'))).filter(r => String(r.dateRecognized || '').startsWith(month));
+    return { value: peso(recs.reduce((sum, r) => sum + (Number(r.amount) || 0), 0)), sub: `recognized sales, ${recs.length} PO${recs.length === 1 ? '' : 's'}` };
+  } };
+  const approvalsCard = { label: 'Pending Approvals', icon: 'clock', tone: 'text-charcoal', href: 'approvals', load: async () => {
+    const dvs = (await get('dv', () => fetchFinanceCollection('disbursementVouchers'))).filter(v => v.status === 'Pending').length;
+    const liq = (await get('ca', () => fetchFinanceCollection('cashAdvances'))).filter(a => a.status === 'Pending Liquidation Review').length;
+    return { value: String(dvs + liq), sub: `${dvs} voucher${dvs === 1 ? '' : 's'}, ${liq} liquidation${liq === 1 ? '' : 's'}` };
+  } };
+  const invoicesCard = { label: 'Outstanding Invoices', icon: 'receipt', tone: 'text-charcoal', href: 'finance/accounts-receivable', load: async () => {
+    const open = (await get('ar', () => fetchFinanceCollection('accountsReceivable'))).filter(ar => balanceOf(ar) > 0.005 && ar.status !== 'Cancelled');
+    return { value: String(open.length), sub: 'with a balance due' };
+  } };
+  const clientPOCard = { label: 'Open Client POs', icon: 'inbox', tone: 'text-charcoal', href: 'client-orders/open-pos', load: async () => {
+    const n = (await get('cpo', () => fetchClientPOs())).filter(p => PO_OPEN_STATUSES.includes(p.status)).length;
+    return { value: String(n), sub: 'Open or Preparing' };
+  } };
+  const overdueCard = { label: 'Overdue Client POs', icon: 'alert-triangle', tone: 'text-red-600', href: 'client-orders/po-monitoring', load: async () => {
+    const n = (await get('cpo', () => fetchClientPOs())).filter(isOverdue).length;
+    return { value: String(n), sub: 'past commitment date', tone: n > 0 ? 'text-red-600' : 'text-charcoal' };
+  } };
+  const supplierPOCard = { label: 'Open Supplier POs', icon: 'shopping-cart', tone: 'text-charcoal', href: 'procurement/supplier-pos', load: async () => {
+    const n = (await get('spo', () => fetchFinanceCollection('supplierPOs'))).filter(p => ['Open', 'Partially Received'].includes(p.status)).length;
+    return { value: String(n), sub: 'Open or partially received' };
+  } };
+
+  const cards = finance
+    ? [cashCard, arCard, apCard, revenueCard, approvalsCard, supplierPOCard, clientPOCard, overdueCard, invoicesCard]
+    : [clientPOCard, overdueCard, ...(canAccess('procurement') ? [supplierPOCard] : [])];
 
   contentWrap(`
     <div class="mb-6">
       <h1 class="text-xl font-semibold text-charcoal">Dashboard</h1>
-      <p class="text-sm text-muted mt-1">Sample placeholder values shown below. This view will connect to live Firestore data in a future phase.</p>
+      <p class="text-sm text-muted mt-1">Live figures from your FMS data as of ${formatDate(today)}. Click a card to open the page behind it.</p>
     </div>
     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-      ${cards.map(c => `
-        <div class="card p-5">
+      ${cards.map((c, i) => `
+        <a href="#/${c.href}" class="card p-5 block hover:bg-cream/40 transition-colors">
           <div class="flex items-start justify-between">
             <p class="text-xs font-medium text-muted uppercase tracking-wide">${c.label}</p>
             <div class="w-8 h-8 rounded-md bg-cream flex items-center justify-center ${c.tone}">${icon(c.icon, 'w-4 h-4')}</div>
           </div>
-          <p class="text-2xl font-semibold text-charcoal mt-3">${c.value}</p>
-        </div>`).join('')}
-    </div>
-
-    <div class="mt-8 card p-6">
-      <div class="flex items-center gap-3 text-muted">
-        ${icon('info', 'w-5 h-5 shrink-0')}
-        <p class="text-sm">This is Phase 1 of ${APP_NAME}. Modules below are navigation and UI placeholders only — accounting logic, calculations and live data connections are built module-by-module in future phases.</p>
-      </div>
+          <p id="dash-val-${i}" class="text-2xl font-semibold text-charcoal mt-3">...</p>
+          <p id="dash-sub-${i}" class="text-xs text-muted mt-1">&nbsp;</p>
+        </a>`).join('')}
     </div>`);
   refreshIcons();
+  cards.forEach(async (c, i) => {
+    try {
+      const r = await c.load();
+      const v = document.getElementById('dash-val-' + i); const sb = document.getElementById('dash-sub-' + i);
+      if (!v) return; // navigated away
+      v.textContent = r.value;
+      if (r.tone) { v.classList.remove('text-charcoal'); v.classList.add(r.tone); }
+      sb.textContent = r.sub || '';
+    } catch (e) {
+      console.error(e);
+      const v = document.getElementById('dash-val-' + i); const sb = document.getElementById('dash-sub-' + i);
+      if (v) v.textContent = '—';
+      if (sb) sb.textContent = 'Could not load';
+    }
+  });
 }
 
 function renderPlaceholderPage(title, description, sectionName) {
