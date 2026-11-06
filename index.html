@@ -236,7 +236,6 @@ const NAV = [
     description: "Suppliers, purchase requests, orders, receiving and payments.",
     children: [
       { name: "Suppliers", path: "procurement/suppliers", description: "Manage supplier records." },
-      { name: "Purchase Requests", path: "procurement/purchase-requests", description: "Manage internal purchase requests." },
       { name: "Supplier POs", path: "procurement/supplier-pos", description: "Manage purchase orders issued to suppliers." },
       { name: "Receiving", path: "procurement/receiving", description: "Record receipt of ordered goods/services." },
       { name: "Supplier Bills", path: "procurement/supplier-bills", description: "Manage bills received from suppliers." },
@@ -4505,7 +4504,7 @@ function readSupplierPOFormValues() {
   const prNumber = prSel && prId ? prSel.options[prSel.selectedIndex].text.split(' — ')[0] : '';
   return {
     supplierPONumber: val('supplierPONumber'),
-    supplierId, supplierName, prId, prNumber,
+    supplierId, supplierName, ...(prSel ? { prId, prNumber } : {}),
     itemsDescription: val('itemsDescription'),
     poAmount: Number(val('poAmount')) || 0,
     dateIssued: val('dateIssued'),
@@ -4537,7 +4536,6 @@ async function renderNewSupplierPOPage() {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('supplierPONumber', 'Supplier PO Number', { required: true })}
           ${supplierSelectHtml(suppliers, null, { required: true })}
-          ${prSelectHtml(prs, null)}
           ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01' })}
           ${dateField('dateIssued', 'Date Issued', { required: true, value: todayISO() })}
           ${dateField('expectedDeliveryDate', 'Expected Delivery Date')}
@@ -4625,7 +4623,7 @@ async function renderEditSupplierPOPage(id) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           ${textField('supplierPONumber', 'Supplier PO Number', { required: true, value: po.supplierPONumber })}
           ${supplierSelectHtml(suppliers, po.supplierId, { required: true })}
-          ${prSelectHtml(prs, po.prId)}
+          ${po.prId ? prSelectHtml(prs, po.prId) : ''}
           ${numberField('poAmount', 'PO Amount (₱)', { required: true, step: '0.01', value: po.poAmount })}
           ${dateField('dateIssued', 'Date Issued', { required: true, value: po.dateIssued })}
           ${dateField('expectedDeliveryDate', 'Expected Delivery Date', { value: po.expectedDeliveryDate })}
