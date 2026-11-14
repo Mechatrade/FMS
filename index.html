@@ -2545,8 +2545,8 @@ async function renderPOMonitoringPage() {
       { label: 'Ready for Billing', value: readyCount, icon: 'check-circle' },
       { label: 'Overdue', value: overdueCount, icon: 'alert-triangle', tone: overdueCount > 0 ? 'text-red-600' : 'text-forest' },
       { label: 'Total Open Value', value: formatCurrency(openValue), icon: 'wallet', wide: true },
-      { label: `YTD Total POs (${ytdYear})`, value: ytd.length, icon: 'file-text', wide: true,
-        sub: `${formatCurrency(ytdValue)} received this year · ${ytd.length - ytdCompleted.length} open, ${ytdCompleted.length} completed` },
+      { label: `YTD Total POs (${ytdYear})`, value: formatCurrency(ytdValue), icon: 'file-text', wide: true,
+        sub: `${ytd.length} PO${ytd.length === 1 ? '' : 's'} received this year · ${ytd.length - ytdCompleted.length} open, ${ytdCompleted.length} completed` },
     ];
 
     document.getElementById('po-kpi-container').innerHTML = cards.map(c => `
