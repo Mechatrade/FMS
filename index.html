@@ -2535,12 +2535,18 @@ async function renderPOMonitoringPage() {
     const overdueCount = all.filter(isOverdue).length;
     const openValue = all.filter(p => !['Ready for Billing', 'Completed', 'Cancelled'].includes(p.status)).reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
 
+    const ytdYear = String(new Date().getFullYear());
+    const ytd = all.filter(p => String(p.dateReceived || '').startsWith(ytdYear) && p.status !== 'Cancelled');
+    const ytdCompleted = ytd.filter(p => p.status === 'Completed');
+    const ytdValue = ytd.reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
     const cards = [
       { label: 'Open POs', value: openCount, icon: 'inbox' },
       { label: 'In Delivery / Preparing', value: inDeliveryCount, icon: 'truck' },
       { label: 'Ready for Billing', value: readyCount, icon: 'check-circle' },
       { label: 'Overdue', value: overdueCount, icon: 'alert-triangle', tone: overdueCount > 0 ? 'text-red-600' : 'text-forest' },
       { label: 'Total Open Value', value: formatCurrency(openValue), icon: 'wallet', wide: true },
+      { label: `YTD Total POs (${ytdYear})`, value: ytd.length, icon: 'file-text', wide: true,
+        sub: `${formatCurrency(ytdValue)} received this year · ${ytd.length - ytdCompleted.length} open, ${ytdCompleted.length} completed` },
     ];
 
     document.getElementById('po-kpi-container').innerHTML = cards.map(c => `
@@ -2550,6 +2556,7 @@ async function renderPOMonitoringPage() {
           <div class="w-8 h-8 rounded-md bg-cream flex items-center justify-center ${c.tone || 'text-forest'}">${icon(c.icon, 'w-4 h-4')}</div>
         </div>
         <p class="text-2xl font-semibold text-charcoal mt-3">${c.value}</p>
+        ${c.sub ? `<p class="text-xs text-muted mt-1">${c.sub}</p>` : ''}
       </div>`).join('');
 
     const recentSorted = [...all].sort((a, b) => {
