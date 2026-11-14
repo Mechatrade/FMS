@@ -1424,14 +1424,31 @@ async function renderDashboard() {
     const n = (await get('cpo', () => fetchClientPOs())).filter(isOverdue).length;
     return { value: String(n), sub: 'past commitment date', tone: n > 0 ? 'text-red-600' : 'text-charcoal' };
   } };
+  const ytdPOs = async () => {
+    const year = String(new Date().getFullYear());
+    return (await get('cpo', () => fetchClientPOs())).filter(p => String(p.dateReceived || '').startsWith(year) && p.status !== 'Cancelled');
+  };
+  const sumPO = (list) => list.reduce((sum, p) => sum + (Number(p.poAmount) || 0), 0);
+  const ytdAllCard = { label: 'YTD Total POs', icon: 'file-text', tone: 'text-forest', href: 'client-orders/po-monitoring', load: async () => {
+    const list = await ytdPOs();
+    return { value: String(list.length), sub: `${peso(sumPO(list))} received this year` };
+  } };
+  const ytdOpenCard = { label: 'YTD Open POs', icon: 'inbox', tone: 'text-charcoal', href: 'client-orders/po-monitoring', load: async () => {
+    const list = (await ytdPOs()).filter(p => p.status !== 'Completed');
+    return { value: String(list.length), sub: `${peso(sumPO(list))} still in progress` };
+  } };
+  const ytdCompletedCard = { label: 'YTD Completed POs', icon: 'check-circle', tone: 'text-forest', href: 'client-orders/po-monitoring', load: async () => {
+    const list = (await ytdPOs()).filter(p => p.status === 'Completed');
+    return { value: String(list.length), sub: `${peso(sumPO(list))} completed` };
+  } };
   const supplierPOCard = { label: 'Open Supplier POs', icon: 'shopping-cart', tone: 'text-charcoal', href: 'procurement/supplier-pos', load: async () => {
     const n = (await get('spo', () => fetchFinanceCollection('supplierPOs'))).filter(p => ['Open', 'Partially Received'].includes(p.status)).length;
     return { value: String(n), sub: 'Open or partially received' };
   } };
 
   const cards = finance
-    ? [cashCard, arCard, apCard, revenueCard, approvalsCard, supplierPOCard, clientPOCard, overdueCard, invoicesCard]
-    : [clientPOCard, overdueCard, ...(canAccess('procurement') ? [supplierPOCard] : [])];
+    ? [cashCard, arCard, apCard, revenueCard, ytdAllCard, ytdOpenCard, ytdCompletedCard, approvalsCard, supplierPOCard, clientPOCard, overdueCard, invoicesCard]
+    : [ytdAllCard, ytdOpenCard, ytdCompletedCard, clientPOCard, overdueCard, ...(canAccess('procurement') ? [supplierPOCard] : [])];
 
   contentWrap(`
     <div class="mb-6">
@@ -2494,7 +2511,19 @@ async function renderPOMonitoringPage() {
       <p class="text-sm text-muted mt-1">Live overview of all client purchase orders.</p>
     </div>
     <div id="po-kpi-container" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">Loading...</div>
-    <h2 class="text-sm font-semibold text-charcoal mb-3">Recent Activity</h2>
+    <div class="flex flex-wrap items-end justify-between gap-3 mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-charcoal">Purchase Orders</h2>
+        <p id="pm-count" class="text-xs text-muted mt-0.5"></p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <input id="pm-search" type="text" placeholder="Search client or PO #..." class="min-w-[200px] rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest" />
+        <select id="pm-status" class="rounded-md border border-borderc bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-forest focus:border-forest">
+          <option value="">All statuses</option>
+          ${PO_STATUSES.map(st => `<option value="${st}">${st}</option>`).join('')}
+        </select>
+      </div>
+    </div>
     <div id="po-activity-container" class="text-sm text-muted">Loading...</div>`);
   refreshIcons();
 
@@ -2527,10 +2556,22 @@ async function renderPOMonitoringPage() {
       const at = a.updatedAt && a.updatedAt.toMillis ? a.updatedAt.toMillis() : 0;
       const bt = b.updatedAt && b.updatedAt.toMillis ? b.updatedAt.toMillis() : 0;
       return bt - at;
-    }).slice(0, 10);
-
-    document.getElementById('po-activity-container').innerHTML = poTableHtml(recentSorted, { emptyMessage: 'No activity yet.' });
-    refreshIcons();
+    });
+    const MAX_SHOWN = 200;
+    const drawList = () => {
+      const st = document.getElementById('pm-status').value;
+      const q = document.getElementById('pm-search').value.trim().toLowerCase();
+      const matches = recentSorted.filter(p => (!st || p.status === st)
+        && (!q || [p.clientName, p.clientPONumber, p.projectDescription].some(v => String(v || '').toLowerCase().includes(q))));
+      const shown = matches.slice(0, MAX_SHOWN);
+      document.getElementById('pm-count').textContent = `${matches.length} of ${all.length} PO${all.length === 1 ? '' : 's'}`
+        + (matches.length > MAX_SHOWN ? ` (showing the latest ${MAX_SHOWN})` : '');
+      document.getElementById('po-activity-container').innerHTML = poTableHtml(shown, { emptyMessage: st || q ? 'No POs match this filter.' : 'No POs yet.' });
+      refreshIcons();
+    };
+    document.getElementById('pm-status').addEventListener('change', drawList);
+    document.getElementById('pm-search').addEventListener('input', drawList);
+    drawList();
   } catch (e) {
     console.error(e);
     document.getElementById('po-kpi-container').innerHTML = poLoadErrorHtml();
