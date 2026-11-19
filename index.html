@@ -4882,6 +4882,11 @@ async function renderNewSupplierPOPage() {
     suppliers = allSuppliers;
     prs = allPRs.filter(p => p.status === 'Approved');
   } catch (e) { console.error(e); }
+  let nextSPONo = '';
+  try {
+    const cfg = await getNumberingConfig('SPO', 'SPO');
+    nextSPONo = `${cfg.prefix}-${new Date().getFullYear()}-${String(cfg.nextNumber).padStart(4, '0')}`;
+  } catch (e) { console.error(e); }
 
   contentWrap(`
     <div class="mb-6">
@@ -4894,7 +4899,11 @@ async function renderNewSupplierPOPage() {
       <div>
         <h2 class="text-sm font-semibold text-charcoal mb-3">Core Details</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          ${textField('supplierPONumber', 'Supplier PO Number', { required: true })}
+          <div>
+            <label class="block text-sm font-medium text-charcoal mb-1.5">Supplier PO Number</label>
+            <input id="field-supplierPONumber" type="text" readonly value="${escapeAttr(nextSPONo)}" class="w-full rounded-md border border-borderc bg-cream px-3 py-2.5 text-sm text-charcoal" />
+            <p class="text-xs text-muted mt-1.5">Generated automatically when you save.</p>
+          </div>
           ${supplierSelectHtml(suppliers, null, { required: true })}
           ${spoAmountFieldHtml(0)}
           ${dateField('dateIssued', 'Date Issued', { required: true, value: todayISO() })}
@@ -4920,12 +4929,18 @@ async function renderNewSupplierPOPage() {
 
       <div class="flex items-center gap-3 pt-2 border-t border-borderc">
         <button id="supplier-po-form-submit" type="submit" class="btn-primary"><span id="supplier-po-form-submit-text">Save Supplier PO</span></button>
+        <button id="supplier-po-form-preview" type="button" class="btn-glass-sm">Preview / Print</button>
         <a href="#/procurement/supplier-pos" class="text-sm text-muted hover:text-charcoal">Cancel</a>
       </div>
     </form>`);
   refreshIcons();
   wirePaymentTermsField();
   wireSPOItemsEditor();
+  document.getElementById('supplier-po-form-preview').addEventListener('click', () => {
+    const d = readSupplierPOFormValues();
+    const sup = suppliers.find(x => x.id === d.supplierId) || null;
+    openSupplierPOPreview(d, sup, (currentProfile && currentProfile.name) || '');
+  });
   document.getElementById('supplier-po-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('supplier-po-form-submit');
@@ -4934,13 +4949,14 @@ async function renderNewSupplierPOPage() {
     errBox.classList.add('hidden');
 
     const data = readSupplierPOFormValues();
-    if (!data.supplierPONumber || !data.supplierId || !data.poAmount || !data.dateIssued) {
+    if (!data.supplierId || !data.poAmount || !data.dateIssued) {
       errBox.textContent = 'Please fill in all required fields (marked with *).';
       errBox.classList.remove('hidden');
       return;
     }
     btn.disabled = true; btnText.innerHTML = spinnerHtml();
     try {
+      data.supplierPONumber = await consumeNextNumber('SPO', 'SPO');
       data.status = 'Open';
       data.billed = false;
       await createFinanceDoc('supplierPOs', data);
@@ -8856,6 +8872,7 @@ const NUMBERING_SERIES_DEFAULTS = [
   { key: 'DV', label: 'Disbursement Vouchers', defaultPrefix: 'DV' },
   { key: 'CA', label: 'Cash Advances', defaultPrefix: 'CA' },
   { key: 'OR', label: 'Official Receipts', defaultPrefix: 'OR' },
+  { key: 'SPO', label: 'Supplier POs', defaultPrefix: 'SPO' },
 ];
 async function renderNumberingSettingsPage() {
   contentWrap(`
